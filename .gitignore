@@ -1,0 +1,20 @@
+# Fetched binaries & build bundles — never committed; pulled by scripts/fetch-artifacts.ps1
+/artifacts/*
+!/artifacts/.gitkeep
+
+# WinSW wrapper copies created by scripts/install.ps1 (services/<name>.exe)
+/services/*.exe
+
+# Runtime
+/logs/
+/caddy-data/
+
+# Exported CA cert (regenerated per box)
+/certs/*.crt
+/certs/*.pem
+/certs/*.der
+!/certs/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db

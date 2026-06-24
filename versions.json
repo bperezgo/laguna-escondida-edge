@@ -1,0 +1,12 @@
+{
+  "_comment": "Pinned versions of everything the edge appliance assembles. scripts/fetch-artifacts.ps1 and scripts/install.ps1 read this. Bump a version here, then run fetch-artifacts + update.",
+  "winsw": "2.12.0",
+  "caddy": "2.8.4",
+  "node": "20.18.0",
+  "postgres": "16.4",
+  "artifacts": {
+    "edge-node":    { "repo": "laguna-escondida-backend",     "version": "TODO" },
+    "pos-printing": { "repo": "laguna-escondida-pos-printing", "version": "TODO" },
+    "next":         { "repo": "laguna-escondida-frontend",     "version": "TODO" }
+  }
+}

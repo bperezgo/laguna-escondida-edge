@@ -1,0 +1,28 @@
+<service>
+  <id>laguna-edge-node</id>
+  <name>Laguna Escondida - Edge Node (API)</name>
+  <description>Go edge API node. Bound to 127.0.0.1:8080. Talks to local Postgres.</description>
+
+  <executable>%BASE%\..\artifacts\edge-node\edge-node.exe</executable>
+  <workingdirectory>%BASE%\..\artifacts\edge-node</workingdirectory>
+
+  <!-- TODO: replace these with the REAL env var names + values from
+       laguna-escondida-backend/.env.example . These are placeholders. -->
+  <env name="HTTP_ADDR"    value="127.0.0.1:8080"/>
+  <env name="DATABASE_URL" value="postgres://laguna:CHANGE_ME@127.0.0.1:5432/laguna?sslmode=disable"/>
+  <env name="APP_ENV"      value="production"/>
+
+  <!-- Boot order: must start after Postgres. If the edge node calls the printing
+       service at startup, also add: <depend>laguna-pos-printing</depend> -->
+  <depend>laguna-postgres</depend>
+
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="10 sec"/>
+  <stoptimeout>30 sec</stoptimeout>
+
+  <logpath>%BASE%\..\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

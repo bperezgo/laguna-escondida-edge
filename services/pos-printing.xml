@@ -1,0 +1,24 @@
+<service>
+  <id>laguna-pos-printing</id>
+  <name>Laguna Escondida - POS Printing</name>
+  <description>Go service that drives fiscal/POS ticket printing. Bound to 127.0.0.1:8090.</description>
+
+  <executable>%BASE%\..\artifacts\pos-printing\pos-printing.exe</executable>
+  <workingdirectory>%BASE%\..\artifacts\pos-printing</workingdirectory>
+
+  <!-- TODO: replace with the REAL env from laguna-escondida-pos-printing/.env.example -->
+  <env name="HTTP_ADDR" value="127.0.0.1:8090"/>
+  <env name="APP_ENV"   value="production"/>
+
+  <depend>laguna-postgres</depend>
+
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="10 sec"/>
+  <stoptimeout>30 sec</stoptimeout>
+
+  <logpath>%BASE%\..\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

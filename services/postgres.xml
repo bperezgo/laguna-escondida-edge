@@ -1,0 +1,29 @@
+<service>
+  <id>laguna-postgres</id>
+  <name>Laguna Escondida - Postgres</name>
+  <description>Local PostgreSQL for the edge node. Bound to 127.0.0.1:5432.</description>
+
+  <!--
+    Portable Postgres bundled under artifacts\postgres.
+    %BASE% = the services\ folder (where the renamed WinSW exe lives), so
+    %BASE%\.. = the install root (C:\laguna-edge).
+
+    ALTERNATIVE: if you install Postgres with the official Windows installer, it
+    registers its OWN service (e.g. "postgresql-x64-16"). In that case DELETE this
+    file and change the <depend>laguna-postgres</depend> in the other services to
+    that name.
+  -->
+  <executable>%BASE%\..\artifacts\postgres\bin\postgres.exe</executable>
+  <arguments>-D "%BASE%\..\artifacts\postgres\data" -h 127.0.0.1 -p 5432</arguments>
+  <workingdirectory>%BASE%\..\artifacts\postgres</workingdirectory>
+
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="10 sec"/>
+  <stoptimeout>30 sec</stoptimeout>
+
+  <logpath>%BASE%\..\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

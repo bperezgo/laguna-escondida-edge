@@ -1,0 +1,22 @@
+<service>
+  <id>laguna-caddy</id>
+  <name>Laguna Escondida - Caddy (HTTPS reverse proxy)</name>
+  <description>The only LAN-exposed service. Terminates TLS (internal CA) and proxies to Next.js.</description>
+
+  <executable>%BASE%\..\artifacts\caddy\caddy.exe</executable>
+  <arguments>run --config "%BASE%\..\Caddyfile" --adapter caddyfile</arguments>
+  <workingdirectory>%BASE%\..\artifacts\caddy</workingdirectory>
+
+  <!-- Start last, after the proxy target (Next) is up. -->
+  <depend>laguna-next</depend>
+
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="10 sec"/>
+  <stoptimeout>30 sec</stoptimeout>
+
+  <logpath>%BASE%\..\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>
