@@ -5,7 +5,6 @@
 #
 # Install-root convention on the Windows box: C:\laguna-edge
 # (the absolute path below must match where you deploy this repo).
-
 {
 	# Persist Caddy's data — INCLUDING the internal CA root cert — at a fixed path so
 	# it survives restarts/reinstalls and provisioned tablets keep trusting HTTPS.
@@ -16,30 +15,30 @@
 }
 
 # ── The POS site ────────────────────────────────────────────────────────────────
-# Tablets reach this via router local DNS:  pos.laguna.lan -> box IP (e.g. 192.168.10.10)
+# Tablets reach this via router local DNS:  pos.laguna.lan -> box IP (e.g. 192.168.101.49)
 # Caddy also listens on :80 and redirects to :443 automatically.
 pos.laguna.lan {
-	tls internal                 # Caddy's own internal CA — no public domain / no ACME
+	tls internal # Caddy's own internal CA — no public domain / no ACME
 
 	encode zstd gzip
 
 	# Defense-in-depth. The Windows Firewall rule (scripts/install.ps1) is the PRIMARY
 	# control; this rejects anything not on the POS subnet at the app layer too.
 	# Keep the CIDR in sync with the firewall rule and your DHCP scope.
-	@notlan not remote_ip 192.168.10.0/24
+	@notlan not remote_ip 192.168.101.0/24
 	respond @notlan "Forbidden" 403
 
 	header {
 		Strict-Transport-Security "max-age=31536000"
-		X-Content-Type-Options    "nosniff"
-		X-Frame-Options           "DENY"
-		Referrer-Policy           "strict-origin-when-cross-origin"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
 		-Server
 	}
 
 	# Proxy to the Next.js standalone server (bound to localhost).
-	reverse_proxy 127.0.0.1:3000 {
-		flush_interval -1        # stream SSE immediately, no buffering
+	reverse_proxy 127.0.0.1:3001 {
+		flush_interval -1 # stream SSE immediately, no buffering
 	}
 }
 
@@ -47,10 +46,10 @@ pos.laguna.lan {
 # Delete the block above and use the box's reserved IP instead. Ugly URL + the cert
 # SAN is the IP, but it works on any router:
 #
-# 192.168.10.10 {
+# 192.168.101.49 {
 # 	tls internal
 # 	encode zstd gzip
-# 	reverse_proxy 127.0.0.1:3000 {
+# 	reverse_proxy 127.0.0.1:3001 {
 # 		flush_interval -1
 # 	}
 # }
