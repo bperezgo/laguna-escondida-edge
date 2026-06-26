@@ -32,10 +32,22 @@ if (-not (Test-Path $WinSW)) {
   Invoke-WebRequest -Uri $url -OutFile $WinSW
 }
 
+# --- 1b. Stage the edge-node config (.env) next to its exe ------------------------
+# The backend loads its config from a .env file in its working directory
+# (cmd/main.go: godotenv.Load()). Copy the per-box env into the artifact folder.
+$EnvSrc = Join-Path $Root 'env\edge-node.env'
+$EnvDst = Join-Path $Root 'artifacts\edge-node\.env'
+if (-not (Test-Path $EnvSrc)) {
+  throw "Missing $EnvSrc. Copy env\edge-node.env.example to env\edge-node.env and fill it in."
+}
+New-Item -ItemType Directory -Force -Path (Split-Path $EnvDst) | Out-Null
+Copy-Item $EnvSrc $EnvDst -Force
+Write-Host "Staged edge-node config -> $EnvDst"
+
 # --- 2. Install services in dependency order --------------------------------------
 # Postgres first; Caddy last. The <depend> entries in each XML also enforce ordering.
 # WinSW finds "<name>.xml" automatically by matching the copied exe's basename.
-$order = 'postgres','edge-node','pos-printing','next','caddy'
+$order = 'postgres','edge-node','next','caddy'
 
 foreach ($name in $order) {
   $xml = Join-Path $Services "$name.xml"

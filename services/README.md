@@ -43,23 +43,32 @@ services\next.exe start
 |---|---|---|---|
 | `postgres.xml` | `laguna-postgres` | 127.0.0.1:5432 | — |
 | `edge-node.xml` | `laguna-edge-node` | 127.0.0.1:8080 | postgres |
-| `pos-printing.xml` | `laguna-pos-printing` | 127.0.0.1:8090 | postgres |
 | `next.xml` | `laguna-next` | 127.0.0.1:3000 | edge-node |
 | `caddy.xml` | `laguna-caddy` | **:443/:80 (LAN)** | next |
 
 `<depend>` makes Windows start dependencies first (and refuse to start a service if its
-dependency failed). That gives us: Postgres → (edge-node, pos-printing) → next → caddy.
+dependency failed). That gives us: Postgres → edge-node → next → caddy.
+
+> Ticket printing is **not** a separate service — it is built into the edge-node binary
+> (`POST /api/device/print`, edge mode) and configured via the `PRINTER_*` vars in
+> `env/edge-node.env`.
 
 ## Editing service config (env, ports)
 
-Env vars are defined **inline** in each XML inside `<env name="..." value="..."/>` — that's what
-WinSW injects into the process. To change a port or a connection string, edit the XML and re-run
-`install.ps1` (re-runnable).
+Two patterns, depending on the service:
 
-**Before first real install, replace the placeholders:**
-- `edge-node.xml` — `HTTP_ADDR`, `DATABASE_URL`, `APP_ENV` → real names from
-  `laguna-escondida-backend/.env.example`.
-- `pos-printing.xml` — `HTTP_ADDR`, `APP_ENV` → real names from
-  `laguna-escondida-pos-printing/.env.example`.
+- **edge-node** reads ALL its config (ports, DB, secrets, sync, printer) from a `.env` file in
+  its working directory — the Go binary loads it on startup (`godotenv.Load()`). That config
+  lives in `env/edge-node.env` (gitignored); `install.ps1` copies it to
+  `artifacts/edge-node/.env`. Edit `env/edge-node.env` and re-run `install.ps1` (re-runnable).
+  Start from the committed template `env/edge-node.env.example`. We keep **no** `<env>` in
+  `edge-node.xml` so there is a single source of truth and no secrets in committed XML.
+- **next / postgres / caddy** have non-secret config defined **inline** in their XML via
+  `<env name="..." value="..."/>`. To change a port, edit the XML and re-run `install.ps1`.
+
+**Before first real install:**
+- Copy `env/edge-node.env.example` → `env/edge-node.env` and fill in the real values
+  (DB password, `JWT_SECRET`, `ADMIN_API_KEY`, `SPACES_*`, `ELECTRONIC_INVOICE_*`, cloud-sync
+  vars, printer target).
 
 Logs for every service roll under `..\logs\` (configured via `<logpath>` + `<log>`).

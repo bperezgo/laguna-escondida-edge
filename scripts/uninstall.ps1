@@ -7,7 +7,7 @@
 $ErrorActionPreference = 'SilentlyContinue'
 $Root     = Split-Path -Parent $PSScriptRoot
 $Services = Join-Path $Root 'services'
-$order    = 'caddy','next','pos-printing','edge-node','postgres'   # reverse of install
+$order    = 'caddy','next','edge-node','postgres'   # reverse of install
 
 foreach ($name in $order) {
   $exe = Join-Path $Services "$name.exe"
