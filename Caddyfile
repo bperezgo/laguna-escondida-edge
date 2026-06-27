@@ -15,22 +15,27 @@
 }
 
 # ── The POS site (IP-based, no local DNS required) ───────────────────────────────
-# Tablets reach this directly at the box's reserved IP:  https://192.168.101.49
-# Caddy's internal CA issues a cert with the IP in the SAN. Pin this IP with a DHCP
-# reservation on the router (bind the box MAC -> 192.168.101.49) so it never changes.
+# The IP and subnet below are PLACEHOLDERS resolved at service start from machine env
+# vars that scripts\install.ps1 exports from env\box.env (the single source of truth):
+#   {$LAGUNA_LAN_IP}   -> e.g. 192.168.0.123   (this box's reserved IP)
+#   {$LAGUNA_LAN_CIDR} -> e.g. 192.168.0.0/24  (the POS subnet)
+# To change the network, edit env\box.env and re-run install.ps1 — do NOT hardcode IPs here.
+#
+# Tablets reach this directly at https://<LAGUNA_LAN_IP>. Caddy's internal CA issues a cert
+# with that IP in the SAN. Pin the IP with a router DHCP reservation so it never changes.
 # Caddy also listens on :80 and redirects to :443 automatically.
 #
 # When you add dedicated DNS hardware later, add a second site address for the
-# hostname (e.g. `pos.laguna.lan, 192.168.101.49 { ... }`) — they coexist.
-192.168.101.49 {
+# hostname (e.g. `pos.laguna.lan, {$LAGUNA_LAN_IP} { ... }`) — they coexist.
+{$LAGUNA_LAN_IP} {
 	tls internal # Caddy's own internal CA — no public domain / no ACME
 
 	encode zstd gzip
 
 	# Defense-in-depth. The Windows Firewall rule (scripts/install.ps1) is the PRIMARY
 	# control; this rejects anything not on the POS subnet at the app layer too.
-	# Keep the CIDR in sync with the firewall rule and your DHCP scope.
-	@notlan not remote_ip 192.168.101.0/24
+	# Same CIDR as the firewall rule — both come from LAGUNA_LAN_CIDR in env\box.env.
+	@notlan not remote_ip {$LAGUNA_LAN_CIDR}
 	respond @notlan "Forbidden" 403
 
 	header {
@@ -51,7 +56,7 @@
 		# the browser gets `Location: https://localhost:3000/signin` and fails (there is no
 		# HTTPS server on :3000; on a tablet localhost is the tablet itself). Strip the bogus
 		# absolute origin so the Location becomes RELATIVE (/signin); the browser then resolves
-		# it against the real host it used (https://192.168.101.49). IP-independent, covers all
+		# it against the real host it used (https://<LAGUNA_LAN_IP>). IP-independent, covers all
 		# server-side redirects. PORT is 3000 on every box, so this match is stable.
 		header_down Location "https?://localhost:3000" ""
 	}

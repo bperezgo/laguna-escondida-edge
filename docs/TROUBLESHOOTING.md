@@ -4,7 +4,8 @@ The "other document you might need." This is the one to open at the restaurant w
 misbehaves and there's no Claude to ask. Each entry: **symptom → why → fix**. Work top-down;
 the layers map to [`VALIDATION.md`](VALIDATION.md) (Postgres → edge-node → Next → Caddy → edge).
 
-> Install root `C:\laguna-edge`, LAN IP `192.168.101.49`. Elevated PowerShell unless noted.
+> Install root `C:\laguna-edge`, LAN IP `192.168.0.123` (this box's `LAGUNA_LAN_IP` from
+> `env\box.env`). Elevated PowerShell unless noted.
 
 ---
 
@@ -20,7 +21,7 @@ that service's `*.err.log` first.
 
 ---
 
-## "Opening https://192.168.101.49 redirects me to localhost:3000"
+## "Opening https://192.168.0.123 redirects me to localhost:3000"
 
 **Why:** Next.js in standalone mode builds redirects with `new URL("/signin", request.url)` and
 derives the **host** from its own bind origin (`localhost:3000`), not the public `Host` header.
@@ -39,7 +40,7 @@ Select-String -Path C:\laguna-edge\Caddyfile -Pattern 'header_down Location'   #
 & C:\laguna-edge\artifacts\caddy\caddy.exe validate --config C:\laguna-edge\Caddyfile --adapter caddyfile
 & C:\laguna-edge\artifacts\caddy\caddy.exe reload   --config C:\laguna-edge\Caddyfile --adapter caddyfile
 # Verify: Location must be relative.
-curl.exe -k -s -i https://192.168.101.49/ | Select-String "location:"     # -> location: /signin
+curl.exe -k -s -i https://192.168.0.123/ | Select-String "location:"     # -> location: /signin
 ```
 
 > A device that still "works" while another is broken usually just has a leftover session
@@ -149,7 +150,7 @@ Check, in order:
 
 ```powershell
 # 1. Is the box actually at the expected IP?
-Get-NetIPAddress -AddressFamily IPv4 | Where-Object IPAddress -like '192.168.101.*'
+Get-NetIPAddress -AddressFamily IPv4 | Where-Object IPAddress -like '192.168.0.*'
 # 2. Is the firewall allowing the tablet's IP?
 Get-NetFirewallRule -DisplayName 'Laguna POS - Caddy (LAN tablets)' |
   Get-NetFirewallAddressFilter | Format-List RemoteAddress
@@ -157,18 +158,18 @@ Get-NetFirewallRule -DisplayName 'Laguna POS - Caddy (LAN tablets)' |
 netstat -ano | Select-String ':443\s' | Select-String LISTENING
 ```
 
-- IP changed → set a **DHCP reservation** on the router (box MAC → `192.168.101.49`). A changed
+- IP changed → set a **DHCP reservation** on the router (box MAC → `192.168.0.123`). A changed
   IP also invalidates the cert SAN.
 - Tablet IP not in the firewall `RemoteAddress` → re-run
   `install.ps1 -AllowedTabletIPs '<the tablet IPs or subnet>'`.
-- Tablet not on the `192.168.101.0/24` subnet → Caddy's `@notlan` guard returns **403** even if
+- Tablet not on the `192.168.0.0/24` subnet → Caddy's `@notlan` guard returns **403** even if
   it connects. Put the tablet on the POS subnet.
 
 ---
 
 ## "403 Forbidden" from the box itself
 
-`@notlan` allows only `192.168.101.0/24`. If the box's own request source IP isn't on that
+`@notlan` allows only `192.168.0.0/24`. If the box's own request source IP isn't on that
 subnet (e.g. you're on a VPN/virtual adapter), you'll get 403. Test from a real LAN client, or
 temporarily widen the CIDR in the `Caddyfile`, `validate` + `reload`.
 
@@ -180,7 +181,7 @@ temporarily widen the CIDR in the `Caddyfile`, `validate` + `reload`.
 .\scripts\uninstall.ps1          # removes services + firewall rule; KEEPS artifacts\ + caddy-data\
 # To also wipe the database (DESTRUCTIVE):
 #   .\scripts\init-postgres.ps1 -DbPassword '...' -Force
-.\scripts\install.ps1 -AllowedTabletIPs '192.168.101.0/24'
+.\scripts\install.ps1 -AllowedTabletIPs '192.168.0.0/24'
 ```
 
 `uninstall.ps1` deliberately keeps `caddy-data\` so the **CA root survives** and tablets keep

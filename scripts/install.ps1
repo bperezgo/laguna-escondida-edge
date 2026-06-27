@@ -12,10 +12,10 @@
 #>
 [CmdletBinding()]
 param(
-  # IPs / CIDRs allowed to reach the app on :443 and :80.
-  # Must match the LAN/subnet in Caddyfile's @notlan guard (192.168.101.0/24).
-  # Tighten this to your DHCP-reserved tablet IPs once you know them.
-  [string[]] $AllowedTabletIPs = @('192.168.101.0/24')
+  # IPs / CIDRs allowed to reach the app on :443 and :80. If omitted, this defaults to
+  # LAGUNA_LAN_CIDR from env\box.env (the single source of truth, also used by the
+  # Caddyfile @notlan guard). Pass this only to tighten to specific tablet IPs.
+  [string[]] $AllowedTabletIPs
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,6 +24,63 @@ $Services = Join-Path $Root 'services'
 $WinSW    = Join-Path $Services 'winsw.exe'
 $Logs     = Join-Path $Root 'logs'
 New-Item -ItemType Directory -Force -Path $Logs | Out-Null
+
+# --- 0. Network identity: read env\box.env, preflight, export for the Caddy service ----
+# env\box.env is the SINGLE SOURCE OF TRUTH for this box's LAN IP/subnet. The Caddyfile
+# uses {$LAGUNA_LAN_IP} / {$LAGUNA_LAN_CIDR} placeholders, the firewall rule below uses the
+# same CIDR, and Caddy's cert SAN derives from the IP — so all three can never drift.
+$BoxEnv = Join-Path $Root 'env\box.env'
+if (-not (Test-Path $BoxEnv)) {
+  throw "Missing $BoxEnv. Copy env\box.env.example to env\box.env and set LAGUNA_LAN_IP / LAGUNA_LAN_CIDR for this box."
+}
+$box = @{}
+foreach ($line in Get-Content $BoxEnv) {
+  $t = $line.Trim()
+  if (-not $t -or $t.StartsWith('#')) { continue }
+  $kv = $t -split '=', 2
+  if ($kv.Count -eq 2) { $box[$kv[0].Trim()] = $kv[1].Trim() }
+}
+$LanIp   = $box['LAGUNA_LAN_IP']
+$LanCidr = $box['LAGUNA_LAN_CIDR']
+if (-not $LanIp -or -not $LanCidr) {
+  throw "env\box.env must define both LAGUNA_LAN_IP and LAGUNA_LAN_CIDR."
+}
+
+# Preflight: the config must match reality, or Caddy serves a cert/site for an IP this box
+# doesn't have and every request silently times out (services 'Running' but unreachable).
+$boxIps = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue).IPAddress
+if ($boxIps -notcontains $LanIp) {
+  throw ("box.env says LAGUNA_LAN_IP=$LanIp but this box does NOT hold that address. " +
+         "This box has: $($boxIps -join ', '). Fix env\box.env (or set a DHCP reservation / static IP).")
+}
+# Preflight: LAGUNA_LAN_IP must fall inside LAGUNA_LAN_CIDR (else firewall blocks the box's own subnet).
+$cidrParts = $LanCidr -split '/'
+if ($cidrParts.Count -ne 2) { throw "LAGUNA_LAN_CIDR ('$LanCidr') is not valid CIDR (expected e.g. 192.168.0.0/24)." }
+$prefix = [int]$cidrParts[1]
+if ($prefix -lt 0 -or $prefix -gt 32) { throw "LAGUNA_LAN_CIDR prefix '/$prefix' is out of range (0-32)." }
+function Convert-IpToUInt32([string]$ip) {
+  $bytes = [System.Net.IPAddress]::Parse($ip).GetAddressBytes()   # network (big-endian) order
+  [Array]::Reverse($bytes)                                        # BitConverter wants little-endian
+  return [System.BitConverter]::ToUInt32($bytes, 0)
+}
+# 0xFFFFFFFFL forces an Int64 literal (bare 0xFFFFFFFF parses as Int32 -1); -band keeps low 32 bits.
+$mask  = [uint32]((0xFFFFFFFFL -shl (32 - $prefix)) -band 0xFFFFFFFFL)
+$ipU   = Convert-IpToUInt32 $LanIp
+$netU  = Convert-IpToUInt32 $cidrParts[0]
+if (($ipU -band $mask) -ne ($netU -band $mask)) {
+  throw "LAGUNA_LAN_IP=$LanIp is not inside LAGUNA_LAN_CIDR=$LanCidr. Fix env\box.env."
+}
+
+# Export as MACHINE env vars so the Caddy service (started below) resolves the {$...}
+# placeholders. Set them in this process too for any immediate use.
+[Environment]::SetEnvironmentVariable('LAGUNA_LAN_IP',   $LanIp,   'Machine')
+[Environment]::SetEnvironmentVariable('LAGUNA_LAN_CIDR', $LanCidr, 'Machine')
+$env:LAGUNA_LAN_IP   = $LanIp
+$env:LAGUNA_LAN_CIDR = $LanCidr
+Write-Host "Network identity OK: LAGUNA_LAN_IP=$LanIp  LAGUNA_LAN_CIDR=$LanCidr (from env\box.env)"
+
+# Firewall default derives from the same CIDR unless the caller tightened it explicitly.
+if (-not $PSBoundParameters.ContainsKey('AllowedTabletIPs')) { $AllowedTabletIPs = @($LanCidr) }
 
 # --- 1. Ensure WinSW.exe is present ------------------------------------------------
 if (-not (Test-Path $WinSW)) {
@@ -114,6 +171,21 @@ foreach ($name in $order) {
   & (Join-Path $Services "$name.exe") start | Out-Host
 }
 
+# --- 3b. Verify Caddy actually came up (catches an unresolved {$LAGUNA_LAN_*} placeholder) ---
+# If the Caddy service didn't inherit the machine env vars, the caddyfile adapter errors on the
+# {$...} placeholder and the service crash-loops. Surface that here instead of letting it look
+# like a network problem. Give WinSW a moment to settle, then check the service state.
+Start-Sleep -Seconds 3
+$caddyState = (Get-Service laguna-caddy -ErrorAction SilentlyContinue).Status
+if ($caddyState -ne 'Running') {
+  $logTail = ''
+  $errLog = Join-Path $Logs 'caddy.err.log'
+  if (Test-Path $errLog) { $logTail = (Get-Content $errLog -Tail 15) -join "`n" }
+  throw ("laguna-caddy is '$caddyState', not Running. The Caddyfile {`$LAGUNA_LAN_IP}/{`$LAGUNA_LAN_CIDR} " +
+         "placeholders likely didn't resolve. Confirm the machine env vars, then re-run.`n--- caddy.err.log ---`n$logTail")
+}
+Write-Host "laguna-caddy is Running."
+
 # --- 4. Windows Firewall: allow :443/:80 ONLY from known tablet IPs ----------------
 $ruleName = 'Laguna POS - Caddy (LAN tablets)'
 Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
@@ -122,7 +194,31 @@ New-NetFirewallRule -DisplayName $ruleName `
   -LocalPort 443,80 -RemoteAddress $AllowedTabletIPs | Out-Null
 Write-Host "Firewall rule set. Allowed: $($AllowedTabletIPs -join ', ')"
 
+# --- 5. Export Caddy's internal-CA root cert + trust it on THIS box -----------------
+# `tls internal` (Caddyfile) signs the LAN cert with Caddy's OWN private CA. Any client that
+# hasn't installed that CA gets ERR_CERT_AUTHORITY_INVALID — the cert is valid, just untrusted.
+# Caddy writes the root only when it issues its first cert, so poll briefly (services started
+# just above). $CaddyData must match the Caddyfile `storage file_system { root ... }`.
+$CaddyData  = 'C:\laguna-edge\caddy-data'
+$RootCrt    = Join-Path $CaddyData 'pki\authorities\local\root.crt'
+$RootExport = 'C:\laguna-edge\laguna-root-ca.crt'
+$deadline   = (Get-Date).AddSeconds(30)
+while (-not (Test-Path $RootCrt) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+if (Test-Path $RootCrt) {
+  # Copy to a fixed, easy-to-grab path for distributing to dev PCs / tablets.
+  Copy-Item $RootCrt $RootExport -Force
+  Write-Host "Exported Caddy root CA -> $RootExport"
+  # Trust it on THIS box too, so a browser opened on the box gets a clean padlock.
+  # Idempotent: re-importing the same cert into LocalMachine\Root is a no-op.
+  Import-Certificate -FilePath $RootCrt -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+  Write-Host "Trusted Caddy root CA in LocalMachine\Root on this box."
+} else {
+  Write-Warning "Caddy root CA not found at $RootCrt yet (Caddy writes it on its first request)."
+  Write-Warning "Once it exists, export it with: Copy-Item '$RootCrt' '$RootExport'"
+}
+
 Write-Host ""
 Write-Host "Done. Next steps:"
-Write-Host "  - Provision tablets: install the Caddy root cert + point them at https://pos.laguna.lan"
+Write-Host "  - Dev PCs / tablets: install $RootExport as a Trusted Root CA, then open https://$LanIp"
+Write-Host "      Windows client:  Import-Certificate -FilePath laguna-root-ca.crt -CertStoreLocation Cert:\LocalMachine\Root"
 Write-Host "  - See provisioning\README.md and certs\README.md"

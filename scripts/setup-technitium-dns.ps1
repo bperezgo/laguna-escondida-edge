@@ -17,13 +17,13 @@
   (CHANGE THIS PASSWORD in the console after first run).
 
 .EXAMPLE
-  .\scripts\setup-technitium-dns.ps1 -BoxIP 192.168.101.49
+  .\scripts\setup-technitium-dns.ps1 -BoxIP 192.168.0.123
 #>
 [CmdletBinding()]
 param(
   [string]   $Hostname   = 'pos.laguna.lan',
   [string]   $Zone       = 'laguna.lan',
-  [string]   $BoxIP      = '192.168.101.49',
+  [string]   $BoxIP      = '192.168.0.123',
   [string[]] $Forwarders = @('1.1.1.1', '8.8.8.8'),
   [string]   $AdminUser  = 'admin',
   [string]   $AdminPass  = 'admin',

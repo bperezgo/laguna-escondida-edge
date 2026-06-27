@@ -62,7 +62,7 @@ If you changed the TP-Link's **DHCP → Primary DNS** to the box during setup, s
   to your normal DNS.
 - Toggle the phone's Wi-Fi to pick up the change.
 
-If you skip this, devices will try to use the box (`192.168.101.49`) for DNS, and once the
+If you skip this, devices will try to use the box (`192.168.0.123`) for DNS, and once the
 box's Technitium isn't running, **internet name resolution on the LAN will fail**. So if
 you're tearing the test down, **do reset the router DNS.**
 

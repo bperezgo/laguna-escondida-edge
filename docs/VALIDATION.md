@@ -5,8 +5,9 @@ Run these checks after an install/update, or any time something looks wrong. The
 tells you exactly where the problem is. Every command is copy-paste from an elevated PowerShell
 on the box.
 
-> Convention: install root is `C:\laguna-edge`, LAN IP is `192.168.101.49`. Adjust if yours
-> differ. `curl.exe` (not the `curl` alias) is used so flags behave like real curl.
+> Convention: install root is `C:\laguna-edge`, LAN IP is `192.168.0.123` (this box's
+> `LAGUNA_LAN_IP` from `env\box.env` — the single source of truth; substitute yours). `curl.exe`
+> (not the `curl` alias) is used so flags behave like real curl.
 
 ---
 
@@ -16,8 +17,8 @@ If you only run one thing, run this. All four services Running + a relative redi
 
 ```powershell
 Get-Service laguna-* | Sort-Object Name | Format-Table Name, Status, StartType
-curl.exe -k -s -o NUL -w "edge root  -> %{http_code}`n" https://192.168.101.49/
-curl.exe -k -s -o NUL -w "edge signin-> %{http_code}`n" https://192.168.101.49/signin
+curl.exe -k -s -o NUL -w "edge root  -> %{http_code}`n" https://192.168.0.123/
+curl.exe -k -s -o NUL -w "edge signin-> %{http_code}`n" https://192.168.0.123/signin
 ```
 
 Expected: 4× `Running`, root `-> 307`, signin `-> 200`.
@@ -138,7 +139,7 @@ curl.exe -s -o NUL -w "next signin -> %{http_code}`n" http://127.0.0.1:3000/sign
   --config C:\laguna-edge\Caddyfile --adapter caddyfile
 
 # The running server exposes an admin API on localhost:2019:
-curl.exe -s http://localhost:2019/config/ | Select-String "192.168.101.49"   # site is loaded
+curl.exe -s http://localhost:2019/config/ | Select-String "192.168.0.123"   # site is loaded
 
 # The internal CA root must exist and be persisted (tablets trust this):
 Test-Path C:\laguna-edge\caddy-data\pki\authorities\local\root.crt           # -> True
@@ -150,7 +151,7 @@ Test-Path C:\laguna-edge\caddy-data\pki\authorities\local\root.crt           # -
 
 ```powershell
 # Root: must be a RELATIVE redirect (the localhost:3000 fix). NOT an absolute localhost URL.
-curl.exe -k -s -i https://192.168.101.49/ | Select-String "HTTP/|location:"
+curl.exe -k -s -i https://192.168.0.123/ | Select-String "HTTP/|location:"
 ```
 
 Expected:
@@ -166,8 +167,8 @@ missing or not reloaded. See [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) → "red
 
 ```powershell
 # Sign-in page renders, and HTTP redirects to HTTPS:
-curl.exe -k -s -o NUL -w "signin -> %{http_code}`n" https://192.168.101.49/signin   # -> 200
-curl.exe    -s -o NUL -w "http   -> %{http_code}`n" http://192.168.101.49/           # -> 308
+curl.exe -k -s -o NUL -w "signin -> %{http_code}`n" https://192.168.0.123/signin   # -> 200
+curl.exe    -s -o NUL -w "http   -> %{http_code}`n" http://192.168.0.123/           # -> 308
 ```
 
 ---
@@ -180,7 +181,7 @@ Get-NetFirewallRule -DisplayName 'Laguna POS - Caddy (LAN tablets)' |
 # RemoteAddress should be your tablet IPs / subnet, NOT "Any".
 ```
 
-Defense-in-depth check: a request whose source isn't on `192.168.101.0/24` gets a 403 from
+Defense-in-depth check: a request whose source isn't on `192.168.0.0/24` gets a 403 from
 Caddy's `@notlan` guard even if the firewall let it through.
 
 ---
@@ -193,6 +194,6 @@ Caddy's `@notlan` guard even if the firewall let it through.
 - [ ] edge-node returns an HTTP code on :8080; log shows DB connected + migrations done
 - [ ] Next returns 200 on `/signin` (loopback)
 - [ ] `caddy validate` passes; CA root.crt exists
-- [ ] `https://192.168.101.49/` → **307 `location: /signin`** (relative)
-- [ ] `https://192.168.101.49/signin` → 200
+- [ ] `https://192.168.0.123/` → **307 `location: /signin`** (relative)
+- [ ] `https://192.168.0.123/signin` → 200
 - [ ] Firewall RemoteAddress = LAN/tablets only

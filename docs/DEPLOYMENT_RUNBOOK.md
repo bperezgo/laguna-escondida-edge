@@ -45,8 +45,9 @@ git --version         # to clone the repos and stamp build SHAs
 
 # b) Symlink capability — "next build" (standalone) needs it. EITHER run builds elevated,
 #    OR enable Developer Mode once (recommended), then normal shells can build:
-Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" `
-  AllowDevelopmentWithoutDevLicense 1 -Type DWord -Force
+Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" AllowDevelopmentWithoutDevLicense 1 -Type DWord -Force
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
 
 > **No Go/pnpm on the restaurant box?** Alternative: build the `artifacts\` folder on a
@@ -147,15 +148,44 @@ Fill every `CHANGE_ME` / `(required)` value. **Critical:** `DB_PASSWORD` must eq
 
 ---
 
-## 7. Install the services + lock the firewall
+## 6b. Set this box's network identity (`box.env`)
 
-**Elevated PowerShell.** Registers all four services in dependency order, stages the `.env`,
-sets the Postgres logon account to `NetworkService`, and adds the firewall rule.
+`env\box.env` is the **single source of truth** for the box's LAN IP and subnet. The `Caddyfile`
+uses `{$LAGUNA_LAN_IP}` / `{$LAGUNA_LAN_CIDR}` placeholders, the firewall rule derives from the
+same CIDR, and Caddy's cert SAN comes from the IP — so they can't drift apart. **Never hardcode
+an IP in the Caddyfile.**
 
 ```powershell
 cd C:\laguna-edge
-# Use your real DHCP-reserved tablet IPs (or the subnet) — must match the Caddyfile @notlan CIDR.
-.\scripts\install.ps1 -AllowedTabletIPs '192.168.101.0/24'
+Copy-Item env\box.env.example env\box.env
+notepad env\box.env
+```
+
+Set both values for THIS box:
+
+- `LAGUNA_LAN_IP` — the box's static / DHCP-reserved IPv4 address (e.g. `192.168.0.123`). Pin it
+  with a router DHCP reservation (step 9) so it never changes.
+- `LAGUNA_LAN_CIDR` — the POS subnet in CIDR form (e.g. `192.168.0.0/24`). `LAGUNA_LAN_IP` must
+  fall inside it.
+
+`install.ps1` **preflights** these against reality — if the box doesn't actually hold
+`LAGUNA_LAN_IP`, or the IP isn't inside `LAGUNA_LAN_CIDR`, it aborts with a clear message instead
+of leaving you with "services Running but nothing reachable."
+
+---
+
+## 7. Install the services + lock the firewall
+
+**Elevated PowerShell.** Registers all four services in dependency order, stages the `.env`,
+exports the network identity from `box.env`, sets the Postgres logon account to `NetworkService`,
+verifies Caddy came up, and adds the firewall rule.
+
+```powershell
+cd C:\laguna-edge
+.\scripts\install.ps1
+# The firewall defaults to LAGUNA_LAN_CIDR from box.env. Pass -AllowedTabletIPs ONLY to
+# tighten to specific DHCP-reserved tablet IPs, e.g.:
+# .\scripts\install.ps1 -AllowedTabletIPs '192.168.0.21','192.168.0.22'
 ```
 
 The script is **re-runnable / self-healing** — if anything failed, fix it and run it again.
@@ -170,26 +200,48 @@ Run the smoke check (full version in [`VALIDATION.md`](VALIDATION.md)):
 Get-Service laguna-* | Format-Table Name, Status, StartType
 # All four should be Running.
 
-curl.exe -k -i https://192.168.101.49/        # expect: 307, Location: /signin  (RELATIVE)
-curl.exe -k -i https://192.168.101.49/signin  # expect: 200, HTML
+# Use the LAGUNA_LAN_IP you set in box.env (this box: 192.168.0.123).
+curl.exe -k -i https://192.168.0.123/        # expect: 307, Location: /signin  (RELATIVE)
+curl.exe -k -i https://192.168.0.123/signin  # expect: 200, HTML
 ```
 
-If `https://192.168.101.49/` redirects to `localhost:3000`, the Caddyfile `header_down Location`
+> **`curl: (28) ... Couldn't connect`** = the IP isn't reachable: `LAGUNA_LAN_IP` in `box.env`
+> doesn't match the address this box actually holds (run `Get-NetIPAddress -AddressFamily IPv4`).
+> Fix `box.env` and re-run `install.ps1` — its preflight now catches this before it bites.
+
+If `https://<LAGUNA_LAN_IP>/` redirects to `localhost:3000`, the Caddyfile `header_down Location`
 fix is missing — see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 
 ---
 
 ## 9. Network + tablets
 
-1. **Router:** add a DHCP reservation binding the box's MAC → `192.168.101.49` so the IP never
-   changes. (The Caddy cert SAN and the firewall rule are tied to this IP.)
-2. **Tablets:** install the Caddy internal-CA root cert so HTTPS is trusted, then open
-   `https://192.168.101.49`. Export the root with:
+1. **Router:** add a DHCP reservation binding the box's MAC → its `LAGUNA_LAN_IP` (this box:
+   `192.168.0.123`) so the IP never changes. (The Caddy cert SAN and the firewall rule are tied
+   to this IP.)
+2. **Why HTTPS shows "not private" (`ERR_CERT_AUTHORITY_INVALID`):** the Caddyfile uses
+   `tls internal`, so Caddy signs the LAN cert with its **own private CA**. The cert is valid;
+   the client just doesn't trust the CA that signed it. Every client (dev PC + tablet) must
+   install Caddy's **root CA** once. `install.ps1` already exports it to
+   `C:\laguna-edge\laguna-root-ca.crt` and trusts it on the box itself. If you need to re-export:
    ```powershell
-   # The root lives under the persisted data dir; export it for tablet install:
    Copy-Item C:\laguna-edge\caddy-data\pki\authorities\local\root.crt C:\laguna-edge\laguna-root-ca.crt
    ```
-   See `certs\README.md` / `provisioning\README.md` for the per-tablet steps.
+3. **Dev PC (Windows):** copy `laguna-root-ca.crt` off the box, then in an elevated PowerShell:
+   ```powershell
+   Import-Certificate -FilePath laguna-root-ca.crt -CertStoreLocation Cert:\LocalMachine\Root
+   ```
+   Then **fully restart the browser** — Chrome caches its trust decision per-process and keeps
+   background processes alive, so a plain close-and-reopen often isn't enough:
+   ```powershell
+   Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force
+   ```
+   Reopen `https://192.168.0.123`. Note: modern Chrome shows a **sliders/"tune" icon**, not a
+   padlock — that icon is still "secure". Click it; it should read *"Connection is secure"*.
+   If it still says "Not secure" after a full restart, confirm the bar shows `https://` (not
+   `http://`) and that you imported the root on **this** machine (each client has its own store).
+4. **Tablets:** install the same `laguna-root-ca.crt` as a trusted CA cert, then open
+   `https://192.168.0.123`. See `certs\README.md` / `provisioning\README.md` for the per-tablet steps.
 
 ---
 

@@ -5,7 +5,8 @@
 schedule so the box tells you when something breaks — important because there's no one watching
 it at the restaurant.
 
-> Install root `C:\laguna-edge`, LAN IP `192.168.101.49`. All commands are PowerShell on the box.
+> Install root `C:\laguna-edge`, LAN IP `192.168.0.123` (this box's `LAGUNA_LAN_IP` from
+> `env\box.env`). All commands are PowerShell on the box.
 
 ---
 
@@ -81,7 +82,7 @@ What "normal" looks like per service:
 
 ```powershell
 # Edge path (what tablets hit). Prints HTTP code + total time.
-curl.exe -k -s -o NUL -w "edge %{http_code}  %{time_total}s`n" https://192.168.101.49/signin
+curl.exe -k -s -o NUL -w "edge %{http_code}  %{time_total}s`n" https://192.168.0.123/signin
 ```
 
 A sudden jump in `time_total`, or a non-200, is your earliest external signal of trouble.
@@ -142,7 +143,7 @@ foreach ($s in 'laguna-postgres','laguna-edge-node','laguna-next','laguna-caddy'
   if ((Get-Service $s).Status -ne 'Running') { $bad += "$s not Running" }
 }
 # 2. edge path answers 200 on /signin?
-$code = (curl.exe -k -s -o NUL -w "%{http_code}" https://192.168.101.49/signin)
+$code = (curl.exe -k -s -o NUL -w "%{http_code}" https://192.168.0.123/signin)
 if ($code -ne '200') { $bad += "edge /signin -> $code" }
 # 3. disk free on C: above 2 GB?
 $free = (Get-PSDrive C).Free / 1GB

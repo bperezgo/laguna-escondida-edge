@@ -3,7 +3,7 @@
 Operational docs for running the Laguna Escondida edge appliance on the restaurant Windows box.
 Written to be self-sufficient: an operator with no developer help can install, verify, watch,
 and fix the box from these alone. Install root is **`C:\laguna-edge`**, LAN IP
-**`192.168.101.49`**.
+**`192.168.0.123`**.
 
 ## Start here
 

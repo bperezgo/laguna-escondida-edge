@@ -119,7 +119,7 @@ This time it proceeds through:
 3. Opens the firewall: **443 + 80** (Caddy) and **53 UDP/TCP** (DNS), LAN-only.
 4. **Installs Technitium** — a small installer window appears; **click through it with the
    defaults**. The script resumes automatically when it closes.
-5. Configures DNS: `pos.laguna.lan → 192.168.101.49`.
+5. Configures DNS: `pos.laguna.lan → 192.168.0.123`.
 
 ### Step 4 — Start Caddy (normal PowerShell, no admin needed)
 
@@ -133,9 +133,9 @@ auto-starting Windows service.
 
 ### Step 5 — Point the TP-Link router at the box
 
-In the router admin (**http://192.168.101.1**):
-- **DHCP → DHCP Settings:** set **Primary DNS = `192.168.101.49`** (leave Secondary blank).
-- **DHCP → Address Reservation:** reserve `192.168.101.49` for this box
+In the router admin (**http://192.168.0.1**):
+- **DHCP → DHCP Settings:** set **Primary DNS = `192.168.0.123`** (leave Secondary blank).
+- **DHCP → Address Reservation:** reserve `192.168.0.123` for this box
   (MAC `6C-62-6D-B0-97-8C`).
 - Save. Then toggle the phone's Wi-Fi off/on so it picks up the new DNS.
 
@@ -155,7 +155,7 @@ In the router admin (**http://192.168.101.1**):
 
 ```powershell
 # DNS answers the local name:
-nslookup pos.laguna.lan 192.168.101.49      # should return 192.168.101.49
+nslookup pos.laguna.lan 192.168.0.123      # should return 192.168.0.123
 
 # Caddy is serving HTTPS on 443:
 Get-NetTCPConnection -LocalPort 443 -State Listen
@@ -170,9 +170,9 @@ only allows real LAN devices. Test the page from the phone, not the box.)
 
 | Item | Value |
 |---|---|
-| Box IP | `192.168.101.49` |
+| Box IP | `192.168.0.123` |
 | Box MAC | `6C-62-6D-B0-97-8C` |
-| Router admin | http://192.168.101.1 |
+| Router admin | http://192.168.0.1 |
 | Hostname | `pos.laguna.lan` |
 | Root cert for phones | `certs\laguna-root.crt` |
 | Setup script | `scripts\dev-test-here.ps1` |

@@ -28,7 +28,7 @@
 [CmdletBinding()]
 param(
   [string] $InterfaceAlias = 'Ethernet',
-  [string] $BoxIP          = '192.168.101.49',
+  [string] $BoxIP          = '192.168.0.123',
   [switch] $Restore
 )
 

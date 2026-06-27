@@ -6,7 +6,7 @@
 # Run it (foreground) from the repo root:
 #   .\artifacts\caddy\caddy.exe run --config .\Caddyfile.lan --adapter caddyfile
 #
-# Then on any device on this network, open:   http://192.168.101.49
+# Then on any device on this network, open:   http://192.168.0.123
 {
 	# No automatic HTTPS — we're intentionally serving plain HTTP on the LAN.
 	auto_https off
