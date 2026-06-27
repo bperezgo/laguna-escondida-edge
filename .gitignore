@@ -5,6 +5,9 @@
 # WinSW wrapper copies created by scripts/install.ps1 (services/<name>.exe)
 /services/*.exe
 
+# Per-box service config with secrets (templates *.env.example are committed)
+/env/*.env
+
 # Runtime
 /logs/
 /caddy-data/

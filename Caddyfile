@@ -14,10 +14,15 @@
 	}
 }
 
-# ── The POS site ────────────────────────────────────────────────────────────────
-# Tablets reach this via router local DNS:  pos.laguna.lan -> box IP (e.g. 192.168.101.49)
+# ── The POS site (IP-based, no local DNS required) ───────────────────────────────
+# Tablets reach this directly at the box's reserved IP:  https://192.168.101.49
+# Caddy's internal CA issues a cert with the IP in the SAN. Pin this IP with a DHCP
+# reservation on the router (bind the box MAC -> 192.168.101.49) so it never changes.
 # Caddy also listens on :80 and redirects to :443 automatically.
-pos.laguna.lan {
+#
+# When you add dedicated DNS hardware later, add a second site address for the
+# hostname (e.g. `pos.laguna.lan, 192.168.101.49 { ... }`) — they coexist.
+192.168.101.49 {
 	tls internal # Caddy's own internal CA — no public domain / no ACME
 
 	encode zstd gzip
@@ -37,19 +42,17 @@ pos.laguna.lan {
 	}
 
 	# Proxy to the Next.js standalone server (bound to localhost).
-	reverse_proxy 127.0.0.1:3001 {
+	reverse_proxy 127.0.0.1:3000 {
 		flush_interval -1 # stream SSE immediately, no buffering
+
+		# Next's middleware (frontend proxy.ts) builds redirects with
+		# `new URL("/signin", request.url)`. In standalone mode Next derives that URL's
+		# HOST from its own bind origin (localhost:3000), NOT the public Host header — so
+		# the browser gets `Location: https://localhost:3000/signin` and fails (there is no
+		# HTTPS server on :3000; on a tablet localhost is the tablet itself). Strip the bogus
+		# absolute origin so the Location becomes RELATIVE (/signin); the browser then resolves
+		# it against the real host it used (https://192.168.101.49). IP-independent, covers all
+		# server-side redirects. PORT is 3000 on every box, so this match is stable.
+		header_down Location "https?://localhost:3000" ""
 	}
 }
-
-# ── Fallback if the router can't do local DNS ────────────────────────────────────
-# Delete the block above and use the box's reserved IP instead. Ugly URL + the cert
-# SAN is the IP, but it works on any router:
-#
-# 192.168.101.49 {
-# 	tls internal
-# 	encode zstd gzip
-# 	reverse_proxy 127.0.0.1:3001 {
-# 		flush_interval -1
-# 	}
-# }

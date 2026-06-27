@@ -1,5 +1,12 @@
 # Plan — Serving the Edge App to LAN Devices (Windows box)
 
+> ⚠️ **Service topology updated.** This doc's *networking / TLS / serving* design is current,
+> but the **service list was written before reconciling with the app repos**. There is **no
+> separate `pos-printing` service** (printing is built into the edge-node binary), and the box
+> runs **4 services** (Postgres → edge-node → next → caddy). See
+> `ai-plan/EDGE_WINDOWS_SERVICES_PLAN.md` for the reconciled service model, env config, and
+> build pipeline — it is the source of truth for anything below about services/ports/env.
+>
 > Status: **decisions locked — ready to implement.** Companion docs:
 > `ai-plan/EDGE_OFFLINE_PLAN.md` (frontend offline architecture),
 > `laguna-escondida-backend/docs/playbooks/` (backend / sync playbooks).
@@ -61,9 +68,7 @@ Android tablets / POS / kitchen (LAN)
    Next.js standalone  (node server.js, bound 127.0.0.1:3000)
         │  http://127.0.0.1:8080  (server-side proxy in app/api/*)
         ▼
-   Go edge node  (bound 127.0.0.1:8080)
-        │           ▲
-        │           └──── Go POS-printing service (bound 127.0.0.1:8090)
+   Go edge node  (bound 127.0.0.1:8080; ticket printing built in, APP_MODE=edge)
         ▼
    Postgres (bound 127.0.0.1:5432)
 ```
@@ -98,9 +103,10 @@ tightly-coupled unit (change a port → both would change in lockstep).
 ### Boundary
 
 The edge repo owns **orchestration, config, and provisioning**. It does **not** own app source —
-it consumes **versioned build artifacts**: the two Go `.exe`s (backend edge node + pos-printing)
-and the frontend's `.next/standalone` bundle + a pinned Node runtime. Same model as a
-docker-compose repo referencing image tags rather than vendoring source.
+it consumes **build artifacts**: the Go `edge-node.exe` (backend; ticket printing built in) and
+the frontend's `.next/standalone` bundle + a pinned Node runtime. (For this single-site install
+the artifacts are built locally on the box from the sibling repos — see
+`EDGE_WINDOWS_SERVICES_PLAN.md` §0/§5.)
 
 ### Structure
 
@@ -108,22 +114,20 @@ docker-compose repo referencing image tags rather than vendoring source.
 laguna-escondida-edge/
   Caddyfile                      # the only LAN-exposed service (§5)
   versions.json                  # pinned artifact versions per app repo
-  services/                      # WinSW (or NSSM) service definitions; encode boot order
-    postgres.xml                 #   boot order: Postgres → edge-node →
-    edge-node.xml                #               pos-printing → next → caddy
-    pos-printing.xml
+  services/                      # WinSW service definitions; encode boot order
+    postgres.xml                 #   boot order: Postgres → edge-node → next → caddy
+    edge-node.xml                #   (ticket printing is built into edge-node, not separate)
     next.xml
     caddy.xml
-  env/                           # per-service env: ports, bind 127.0.0.1, API URLs
-    edge-node.env
-    pos-printing.env
-    next.env                     #   PORT=3000 HOSTNAME=127.0.0.1
-                                 #   NEXT_PUBLIC_API_URL=http://127.0.0.1:8080/api
+  env/                           # per-box backend config (gitignored; *.example committed)
+    edge-node.env.example        #   PORT, DB_*, APP_MODE=edge, secrets, sync, PRINTER_*
+                                 #   (next config stays inline in services/next.xml)
   scripts/
-    fetch-artifacts.ps1          # download pinned builds (GitHub Releases / CI artifacts)
-    install.ps1                  # register services, set boot order, firewall rules
+    fetch-artifacts.ps1          # download off-the-shelf binaries (Caddy, Node, Postgres)
+    build-artifacts.ps1          # build Go exe + Next standalone bundle from sibling repos
+    install.ps1                  # register services, stage .env, set firewall rules
     uninstall.ps1
-    update.ps1                   # swap a single service to a new pinned version
+    update.ps1                   # swap a single service to a new build
   certs/                         # Caddy root CA export → installed on each tablet
   provisioning/                  # tablet setup runbook (§8)
   artifacts/                     # (gitignored) fetched .exe's + Next bundle + Node land here
@@ -132,10 +136,10 @@ laguna-escondida-edge/
 
 ### Artifact flow
 
-1. Each app repo publishes a release artifact (GitHub Release or CI build).
-2. `versions.json` pins the version of each.
-3. `fetch-artifacts.ps1` downloads them into `artifacts/`.
-4. `install.ps1` lays them out and registers the five Windows services.
+1. `fetch-artifacts.ps1` downloads the off-the-shelf binaries (Caddy, Node, Postgres).
+2. `build-artifacts.ps1` builds the Go `edge-node.exe` and the Next standalone bundle from the
+   sibling app repos into `artifacts/`.
+3. `install.ps1` stages `env/edge-node.env` and registers the four Windows services.
 
 ---
 
@@ -226,7 +230,7 @@ device identity is ever required (`tls { client_auth { mode require_and_verify �
 
 ### Services (registered by `install.ps1`, via WinSW or NSSM)
 
-Boot order: **Postgres → Go edge node → Go pos-printing → Next standalone → Caddy.**
+Boot order: **Postgres → Go edge node → Next standalone → Caddy.**
 - Caddy's data dir (its internal CA + certs) **must persist across restarts** — back it up; if
   it's lost, the root cert changes and every tablet must re-trust.
 
@@ -248,7 +252,7 @@ Boot order: **Postgres → Go edge node → Go pos-printing → Next standalone 
 - [ ] Create `laguna-escondida-edge`; add `Caddyfile`, `versions.json`, `services/`, `env/`,
       `scripts/`, `provisioning/`, `README.md` per §4.
 - [ ] Each app repo publishes a fetchable release artifact (Go `.exe`s, Next standalone bundle).
-- [ ] `fetch-artifacts.ps1` + `install.ps1` register the five services with the §8 boot order.
+- [ ] `fetch-artifacts.ps1` + `build-artifacts.ps1` + `install.ps1` register the four services with the §8 boot order.
 
 **Networking & TLS**
 - [ ] Bind Next + both Go services + Postgres to `127.0.0.1`; expose only Caddy on the LAN (§2).

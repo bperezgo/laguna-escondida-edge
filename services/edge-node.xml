@@ -1,19 +1,19 @@
 <service>
   <id>laguna-edge-node</id>
   <name>Laguna Escondida - Edge Node (API)</name>
-  <description>Go edge API node. Bound to 127.0.0.1:8080. Talks to local Postgres.</description>
+  <description>Go backend API in edge mode. Bound to 127.0.0.1:8080. Talks to local Postgres, syncs to the cloud, and drives ticket printing. Migrations are embedded in the binary and auto-run on startup.</description>
 
   <executable>%BASE%\..\artifacts\edge-node\edge-node.exe</executable>
+
+  <!-- The binary loads its config from a .env file in its WORKING DIRECTORY
+       (cmd/main.go: godotenv.Load()). scripts\install.ps1 copies
+       env\edge-node.env -> artifacts\edge-node\.env, so set the working dir here.
+       All app config (ports, DB, secrets, sync, printer) lives in that .env —
+       see env\edge-node.env.example. We deliberately keep NO <env> here so there
+       is a single source of truth and no secrets in committed XML. -->
   <workingdirectory>%BASE%\..\artifacts\edge-node</workingdirectory>
 
-  <!-- TODO: replace these with the REAL env var names + values from
-       laguna-escondida-backend/.env.example . These are placeholders. -->
-  <env name="HTTP_ADDR"    value="127.0.0.1:8080"/>
-  <env name="DATABASE_URL" value="postgres://laguna:CHANGE_ME@127.0.0.1:5432/laguna?sslmode=disable"/>
-  <env name="APP_ENV"      value="production"/>
-
-  <!-- Boot order: must start after Postgres. If the edge node calls the printing
-       service at startup, also add: <depend>laguna-pos-printing</depend> -->
+  <!-- Boot order: must start after Postgres. -->
   <depend>laguna-postgres</depend>
 
   <startmode>Automatic</startmode>

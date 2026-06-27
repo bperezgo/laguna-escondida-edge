@@ -4,6 +4,21 @@
   <description>Local PostgreSQL for the edge node. Bound to 127.0.0.1:5432.</description>
 
   <!--
+    SERVICE ACCOUNT: postgres.exe REFUSES to run under an account with administrative
+    privileges ("PostgreSQL server will not run as a user with administrative privileges").
+    WinSW services default to LocalSystem, which IS privileged, so postgres exits
+    immediately and the service loops in StartPending. This ONE service must therefore run
+    as the low-privilege built-in NetworkService account (what the official installer does).
+
+    The account is NOT set in this XML: WinSW 2.x's <serviceaccount> only works for real
+    user accounts with a password and silently ignores built-in virtual accounts such as
+    NetworkService. Instead, scripts\install.ps1 sets it after install via the Win32_Service
+    CIM Change() method, and grants NetworkService Modify on artifacts\postgres and logs via
+    icacls. The other services stay LocalSystem (Caddy needs that to install its root CA into
+    the machine trust store).
+  -->
+
+  <!--
     Portable Postgres bundled under artifacts\postgres.
     %BASE% = the services\ folder (where the renamed WinSW exe lives), so
     %BASE%\.. = the install root (C:\laguna-edge).
