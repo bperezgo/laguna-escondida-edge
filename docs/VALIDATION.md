@@ -11,6 +11,36 @@ on the box.
 
 ---
 
+## Network identity matches reality (check this FIRST after a reboot)
+
+The box's whole config — Caddy's cert SAN, the firewall rule, the URL tablets hit — is pinned to
+`LAGUNA_LAN_IP` in `env\box.env`. If the box is on **DHCP** and the router hands it a different
+address after a reboot, every service stays `Running` but the box is unreachable at the old IP.
+This is the #1 cause of "services are up but `https://<ip>` is dead". Check it before anything else:
+
+```powershell
+# What IP does this box ACTUALLY hold right now? (ignores loopback + APIPA 169.254.*)
+Get-NetIPAddress -AddressFamily IPv4 |
+  Where-Object { $_.IPAddress -notlike '169.*' -and $_.IPAddress -ne '127.0.0.1' } |
+  Format-Table IPAddress, InterfaceAlias
+
+# What IP does the config EXPECT?
+Get-Content C:\laguna-edge\env\box.env
+
+# Does the app serve on the box itself, regardless of network address?
+curl.exe -k -s -o NUL -w "local -> %{http_code}`n" https://127.0.0.1/signin   # -> 200 = stack healthy
+```
+
+- **Actual IP == box.env, `local -> 200`** → identity is fine; move on to §1.
+- **Actual IP != box.env** → that's the problem. Best fix: set a **DHCP reservation / static IP**
+  on the router so this box always gets the same address, then reboot. Quick fix: update
+  `LAGUNA_LAN_IP` in `env\box.env` to the new IP and re-run `scripts\install.ps1` (elevated) — but
+  a moving IP also breaks the tablets, so the reservation is the real fix.
+- **`local` is not 200** → it's not a network/IP issue; Caddy or an upstream is actually down —
+  go to §6 and the logs.
+
+---
+
 ## 0. One-shot smoke test
 
 If you only run one thing, run this. All four services Running + a relative redirect = healthy.
