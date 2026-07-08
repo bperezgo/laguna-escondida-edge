@@ -14,7 +14,13 @@
 
 # Listen on port 80 on every interface, plain HTTP.
 :80 {
-	encode zstd gzip
+	# Do NOT compress Server-Sent Events — a streaming compressor buffers the small
+	# SSE frames (order events + heartbeats) so they never reach the browser. Exclude
+	# the SSE path; compress everything else. (See Caddyfile for the full write-up.)
+	@notsse {
+		not path /api/sse/*
+	}
+	encode @notsse zstd gzip
 
 	# Proxy to the app bound locally on 3001 (it listens on [::]).
 	reverse_proxy localhost:3001 {

@@ -30,7 +30,15 @@
 {$LAGUNA_LAN_IP} {
 	tls internal # Caddy's own internal CA — no public domain / no ACME
 
-	encode zstd gzip
+	# Do NOT compress Server-Sent Events. A streaming compressor buffers the small
+	# SSE frames (order events + 15s heartbeats) until its window fills, so events
+	# never reach the browser — the stream connects but stays empty. Confirmed live:
+	# the SSE response carried `content-encoding: zstd` and the EventStream was empty.
+	# Exclude the SSE path from compression; every other response is still compressed.
+	@notsse {
+		not path /api/sse/*
+	}
+	encode @notsse zstd gzip
 
 	# Defense-in-depth. The Windows Firewall rule (scripts/install.ps1) is the PRIMARY
 	# control; this rejects anything not on the POS subnet at the app layer too.
