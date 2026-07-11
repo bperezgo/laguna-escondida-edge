@@ -138,11 +138,28 @@ foreach ($name in $order) {
   # pitfalls, and work even when the WinSW wrapper exe is missing or its XML was unparseable.
   if (Get-CimInstance Win32_Service -Filter "Name='$svcId'" -ErrorAction SilentlyContinue) {
     Write-Host "Service $svcId already exists; removing before reinstall"
-    & sc.exe stop   $svcId | Out-Null      # ignore errors (may already be stopped)
+    & sc.exe stop $svcId | Out-Null        # ignore exit code: may already be stopped
+    # WAIT for STOPPED before deleting. sc.exe stop only REQUESTS a stop and returns immediately;
+    # a slow shutdown (e.g. postgres draining + checkpointing) keeps the WinSW wrapper alive, and
+    # it holds a handle on services\<name>.exe until its child exits. Deleting/copying over that
+    # locked exe is what fails the reinstall ("used by another process"). WaitForStatus blocks
+    # until SCM reports Stopped (or times out); tolerate the timeout and press on to delete anyway.
+    try { (Get-Service $svcId).WaitForStatus('Stopped', (New-TimeSpan -Seconds 30)) }
+    catch { Write-Warning "$svcId did not reach 'Stopped' within 30s; continuing to delete." }
     & sc.exe delete $svcId | Out-Null
     Start-Sleep -Seconds 2                  # let SCM finish deregistration before reinstalling
   }
-  Copy-Item $WinSW $exe -Force
+  # Copy the WinSW wrapper into place. RACE: even after SCM reports Stopped + deleted, the wrapper
+  # process can linger briefly (killing its child, flushing logs), still holding <name>.exe. A
+  # single Copy-Item then dies with "used by another process" and aborts the whole install. Retry
+  # until the handle releases; only surface the error if it is still locked after that (mirrors
+  # the Remove-Item retry in uninstall.ps1, which guards the same lingering-wrapper window).
+  $copied = $false
+  foreach ($attempt in 1..10) {
+    try { Copy-Item $WinSW $exe -Force -ErrorAction Stop; $copied = $true; break }
+    catch { Start-Sleep -Milliseconds 500 }
+  }
+  if (-not $copied) { Copy-Item $WinSW $exe -Force }   # final attempt: surface the real error
   Write-Host "Installing service: $name"
   & $exe install | Out-Host
 }
