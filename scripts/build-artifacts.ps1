@@ -61,6 +61,19 @@ function GitSha($repo) {
   try { $s = (& git -C $repo rev-parse --short HEAD 2>$null); if ($LASTEXITCODE -eq 0) { return $s.Trim() } } catch {}
   return 'unknown'
 }
+# Parse a KEY=VALUE .env file (ignoring blanks and #comments) into an ordered map. Used to load
+# per-box NEXT_PUBLIC_* build-time vars from env\next.env. Mirrors the box.env parser in install.ps1.
+function Read-DotEnv($path) {
+  $map = [ordered]@{}
+  if (-not (Test-Path $path)) { return $map }
+  foreach ($line in Get-Content $path) {
+    $t = $line.Trim()
+    if (-not $t -or $t.StartsWith('#')) { continue }
+    $kv = $t -split '=', 2
+    if ($kv.Count -eq 2) { $map[$kv[0].Trim()] = $kv[1].Trim() }
+  }
+  return $map
+}
 # Record what we built into versions.json (traceability for a single-site install).
 function Stamp($key, $sha) {
   $vf = Join-Path $Root 'versions.json'
@@ -127,10 +140,25 @@ See ai-plan\EDGE_WINDOWS_SERVICES_PLAN.md (Phase 2, build prerequisites).
   if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }   # clean rebuild: never leave stale chunks
   New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
+  # Per-box NEXT_PUBLIC_* the CLIENT bundle reads (e.g. NEXT_PUBLIC_ORDER_ACTION_PIN) are
+  # inlined at BUILD time, so they must be in the environment for `pnpm build` — setting them
+  # only in services\next.xml (runtime) never reaches the browser. Source them from env\next.env
+  # (gitignored; copy env\next.env.example). Missing file => none applied (build still works).
+  $frontendEnvFile = Join-Path $Root 'env\next.env'
+  $frontendEnv     = Read-DotEnv $frontendEnvFile
+  if ($frontendEnv.Count) {
+    # Log KEYS ONLY — values may be secret-ish (a PIN) and must not land in build logs.
+    Write-Host ("  Frontend build env from env\next.env: " + (($frontendEnv.Keys) -join ', ')) -ForegroundColor DarkGray
+  } else {
+    Write-Warning "env\next.env not found (or empty). No per-box NEXT_PUBLIC_* inlined (e.g. NEXT_PUBLIC_ORDER_ACTION_PIN). Copy env\next.env.example if the app needs them."
+  }
+
   Push-Location $FrontendRepo
   try {
     $env:NEXT_PUBLIC_API_URL = $BackendApiUrl   # inlined at build time (server-only usage)
     $env:NODE_ENV = 'production'
+    # Apply every key from env\next.env verbatim (adding a new NEXT_PUBLIC_* needs no change here).
+    foreach ($k in $frontendEnv.Keys) { Set-Item -Path "Env:\$k" -Value $frontendEnv[$k] }
     Step "pnpm install --frozen-lockfile"
     Run "pnpm install --frozen-lockfile" "pnpm install"
     Step "pnpm build"
@@ -138,6 +166,7 @@ See ai-plan\EDGE_WINDOWS_SERVICES_PLAN.md (Phase 2, build prerequisites).
   } finally {
     Pop-Location
     Remove-Item Env:\NEXT_PUBLIC_API_URL, Env:\NODE_ENV -ErrorAction SilentlyContinue
+    foreach ($k in $frontendEnv.Keys) { Remove-Item -Path "Env:\$k" -ErrorAction SilentlyContinue }
   }
 
   $standalone = Join-Path $FrontendRepo '.next\standalone'

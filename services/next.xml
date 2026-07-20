@@ -15,6 +15,10 @@
        CLIENT bundle reads are inlined at BUILD time, so this must also be set when the
        frontend standalone build is produced, not only here at runtime. -->
   <env name="NEXT_PUBLIC_API_URL" value="http://127.0.0.1:8080/api"/>
+  <!-- Other NEXT_PUBLIC_* vars the tablet reads (e.g. NEXT_PUBLIC_ORDER_ACTION_PIN) are
+       client-side and inlined at BUILD time only. They are NOT set here — they come from
+       env\next.env via scripts\build-artifacts.ps1. Setting them here would have no effect
+       on the browser bundle. Add one here ONLY if the frontend also reads it server-side. -->
 
   <depend>laguna-edge-node</depend>
 
