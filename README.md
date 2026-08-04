@@ -38,6 +38,8 @@ Everything except Caddy binds to `127.0.0.1`, so only Caddy is reachable from th
 | `scripts/uninstall.ps1` | Remove all services + firewall rule |
 | `scripts/fetch-artifacts.ps1` | Download off-the-shelf binaries (Caddy, Node, Postgres) into `artifacts/` |
 | `scripts/update.ps1` | Swap one service to a new pinned version |
+| `scripts/set-lan-ip.ps1` | Re-point the box at its current LAN IP after DHCP moved it (run as Admin) |
+| `env/box.env.example` | Template for this box's LAN IP/subnet; copy to `env/box.env` (gitignored) |
 | `env/edge-node.env.example` | Template for the backend's per-box config; copy to `env/edge-node.env` (gitignored) |
 | `versions.json` | Pinned versions (WinSW, Caddy, Node, Postgres, app artifacts) |
 | `certs/` | Exported Caddy root CA for tablets — see `certs/README.md` |

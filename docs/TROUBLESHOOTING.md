@@ -158,8 +158,22 @@ Get-NetFirewallRule -DisplayName 'Laguna POS - Caddy (LAN tablets)' |
 netstat -ano | Select-String ':443\s' | Select-String LISTENING
 ```
 
-- IP changed → set a **DHCP reservation** on the router (box MAC → `192.168.0.123`). A changed
-  IP also invalidates the cert SAN.
+- **The box's IP changed** (the usual cause — the router hands out a new address on every
+  reboot unless it's pinned) → run the one-liner recovery, from an elevated PowerShell:
+
+  ```powershell
+  .\scripts\set-lan-ip.ps1        # auto-detects the new IP, or pass -IP 192.168.0.100
+  ```
+
+  It updates `env\box.env` **and** the machine env vars **and** restarts `laguna-caddy`, then
+  proves it worked by reading the cert Caddy actually serves. All three must move together:
+  the `Caddyfile` resolves `{$LAGUNA_LAN_IP}` from the *machine env var* at process start, so
+  editing `box.env` alone does nothing, and `caddy reload` alone does nothing (it re-reads the
+  file, not the environment). Tablets then browse to the new `https://<ip>` — the internal CA
+  root is unchanged, so no tablet needs re-trusting.
+
+  Then stop it recurring: set a **DHCP reservation** on the router (box MAC → its IP).
+
 - Tablet IP not in the firewall `RemoteAddress` → re-run
   `install.ps1 -AllowedTabletIPs '<the tablet IPs or subnet>'`.
 - Tablet not on the `192.168.0.0/24` subnet → Caddy's `@notlan` guard returns **403** even if
