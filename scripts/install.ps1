@@ -45,6 +45,10 @@ $LanCidr = $box['LAGUNA_LAN_CIDR']
 if (-not $LanIp -or -not $LanCidr) {
   throw "env\box.env must define both LAGUNA_LAN_IP and LAGUNA_LAN_CIDR."
 }
+# OPTIONAL: local DNS hostname(s) this box also serves on (e.g. pos.laguna.lan). When set,
+# Caddy serves BOTH the hostname and the IP; when blank it stays IP-only. Comma-separated
+# names are allowed. This composes into the Caddyfile's {$LAGUNA_SITE_ADDR} site address.
+$LanHost = $box['LAGUNA_LAN_HOST']
 
 # Preflight: the config must match reality, or Caddy serves a cert/site for an IP this box
 # doesn't have and every request silently times out (services 'Running' but unreachable).
@@ -71,13 +75,21 @@ if (($ipU -band $mask) -ne ($netU -band $mask)) {
   throw "LAGUNA_LAN_IP=$LanIp is not inside LAGUNA_LAN_CIDR=$LanCidr. Fix env\box.env."
 }
 
+# Compose the Caddy site address from the (optional) hostname + the IP. Both coexist when a
+# hostname is set; IP-only otherwise. Keeping this ONE composed value out of the Caddyfile is
+# what lets a blank hostname stay valid — otherwise "{$LAGUNA_LAN_HOST}, {$LAGUNA_LAN_IP}"
+# would collapse to a leading ", <ip>" and Caddy would reject the empty site label.
+if ($LanHost) { $SiteAddr = "$LanHost, $LanIp" } else { $SiteAddr = $LanIp }
+
 # Export as MACHINE env vars so the Caddy service (started below) resolves the {$...}
 # placeholders. Set them in this process too for any immediate use.
-[Environment]::SetEnvironmentVariable('LAGUNA_LAN_IP',   $LanIp,   'Machine')
-[Environment]::SetEnvironmentVariable('LAGUNA_LAN_CIDR', $LanCidr, 'Machine')
-$env:LAGUNA_LAN_IP   = $LanIp
-$env:LAGUNA_LAN_CIDR = $LanCidr
-Write-Host "Network identity OK: LAGUNA_LAN_IP=$LanIp  LAGUNA_LAN_CIDR=$LanCidr (from env\box.env)"
+[Environment]::SetEnvironmentVariable('LAGUNA_LAN_IP',    $LanIp,    'Machine')
+[Environment]::SetEnvironmentVariable('LAGUNA_LAN_CIDR',  $LanCidr,  'Machine')
+[Environment]::SetEnvironmentVariable('LAGUNA_SITE_ADDR', $SiteAddr, 'Machine')
+$env:LAGUNA_LAN_IP    = $LanIp
+$env:LAGUNA_LAN_CIDR  = $LanCidr
+$env:LAGUNA_SITE_ADDR = $SiteAddr
+Write-Host "Network identity OK: LAGUNA_SITE_ADDR='$SiteAddr'  LAGUNA_LAN_CIDR=$LanCidr (from env\box.env)"
 
 # Firewall default derives from the same CIDR unless the caller tightened it explicitly.
 if (-not $PSBoundParameters.ContainsKey('AllowedTabletIPs')) { $AllowedTabletIPs = @($LanCidr) }
@@ -198,7 +210,7 @@ if ($caddyState -ne 'Running') {
   $logTail = ''
   $errLog = Join-Path $Logs 'caddy.err.log'
   if (Test-Path $errLog) { $logTail = (Get-Content $errLog -Tail 15) -join "`n" }
-  throw ("laguna-caddy is '$caddyState', not Running. The Caddyfile {`$LAGUNA_LAN_IP}/{`$LAGUNA_LAN_CIDR} " +
+  throw ("laguna-caddy is '$caddyState', not Running. The Caddyfile {`$LAGUNA_SITE_ADDR}/{`$LAGUNA_LAN_CIDR} " +
          "placeholders likely didn't resolve. Confirm the machine env vars, then re-run.`n--- caddy.err.log ---`n$logTail")
 }
 Write-Host "laguna-caddy is Running."
@@ -235,7 +247,9 @@ if (Test-Path $RootCrt) {
 }
 
 Write-Host ""
+$primaryHost = if ($LanHost) { ($LanHost -split ',')[0].Trim() } else { $LanIp }
+$altNote     = if ($LanHost) { " (or https://$LanIp)" } else { "" }
 Write-Host "Done. Next steps:"
-Write-Host "  - Dev PCs / tablets: install $RootExport as a Trusted Root CA, then open https://$LanIp"
+Write-Host "  - Dev PCs / tablets: install $RootExport as a Trusted Root CA, then open https://$primaryHost$altNote"
 Write-Host "      Windows client:  Import-Certificate -FilePath laguna-root-ca.crt -CertStoreLocation Cert:\LocalMachine\Root"
 Write-Host "  - See provisioning\README.md and certs\README.md"

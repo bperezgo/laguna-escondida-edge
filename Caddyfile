@@ -14,20 +14,22 @@
 	}
 }
 
-# ── The POS site (IP-based, no local DNS required) ───────────────────────────────
-# The IP and subnet below are PLACEHOLDERS resolved at service start from machine env
-# vars that scripts\install.ps1 exports from env\box.env (the single source of truth):
-#   {$LAGUNA_LAN_IP}   -> e.g. 192.168.0.123   (this box's reserved IP)
-#   {$LAGUNA_LAN_CIDR} -> e.g. 192.168.0.0/24  (the POS subnet)
-# To change the network, edit env\box.env and re-run install.ps1 — do NOT hardcode IPs here.
+# ── The POS site (optional hostname + IP, both env-driven) ───────────────────────
+# The site address + subnet below are PLACEHOLDERS resolved at service start from machine env
+# vars that scripts\install.ps1 builds from env\box.env (the single source of truth):
+#   {$LAGUNA_SITE_ADDR} -> "pos.laguna.lan, 192.168.10.10" (host+IP) or "192.168.10.10" (IP-only)
+#   {$LAGUNA_LAN_CIDR}  -> e.g. 192.168.10.0/24  (the POS subnet; used by the @notlan guard)
+# To change the network/hostname, edit env\box.env and re-run install.ps1 — do NOT hardcode here.
 #
-# Tablets reach this directly at https://<LAGUNA_LAN_IP>. Caddy's internal CA issues a cert
-# with that IP in the SAN. Pin the IP with a router DHCP reservation so it never changes.
-# Caddy also listens on :80 and redirects to :443 automatically.
+# Tablets reach this at https://<LAGUNA_LAN_HOST> (if set) and/or https://<LAGUNA_LAN_IP>.
+# Caddy's internal CA issues ONE cert carrying every address in the SAN. Pin the IP with a
+# router DHCP reservation so it never changes. Caddy also listens on :80 and redirects to :443.
 #
-# When you add dedicated DNS hardware later, add a second site address for the
-# hostname (e.g. `pos.laguna.lan, {$LAGUNA_LAN_IP} { ... }`) — they coexist.
-{$LAGUNA_LAN_IP} {
+# Set LAGUNA_LAN_HOST in env\box.env (e.g. pos.laguna.lan) and add a matching local DNS record
+# (host -> IP) on the router; Caddy then serves the hostname AND the IP (they coexist), so phones
+# can move to https://pos.laguna.lan while the raw IP keeps working. Leave the host blank for an
+# IP-only box — {$LAGUNA_SITE_ADDR} collapses to just the IP, with no Caddyfile change.
+{$LAGUNA_SITE_ADDR} {
 	tls internal # Caddy's own internal CA — no public domain / no ACME
 
 	# Do NOT compress Server-Sent Events. A streaming compressor buffers the small
