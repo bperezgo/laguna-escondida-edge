@@ -10,7 +10,9 @@
 $ErrorActionPreference = 'Stop'
 $Root     = Split-Path -Parent $PSScriptRoot
 $Services = Join-Path $Root 'services'
-$order    = 'caddy','next','edge-node','postgres'   # reverse of install
+# Reverse of install. 'alloy' is listed unconditionally: a box whose env\alloy.env was
+# removed still has the service registered, and that ghost is exactly what needs cleaning.
+$order    = 'caddy','next','edge-node','postgres','alloy'
 
 foreach ($name in $order) {
   $svcId = "laguna-$name"
@@ -49,4 +51,4 @@ foreach ($name in $order) {
 Get-NetFirewallRule -DisplayName 'Laguna POS - Caddy (LAN tablets)' -ErrorAction SilentlyContinue |
   Remove-NetFirewallRule
 
-Write-Host "Uninstalled. (artifacts\ and caddy-data\ left intact.)"
+Write-Host "Uninstalled. (artifacts\, caddy-data\ and alloy-data\ left intact.)"

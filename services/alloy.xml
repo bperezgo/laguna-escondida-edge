@@ -1,0 +1,50 @@
+<service>
+  <id>laguna-alloy</id>
+  <name>Laguna Escondida - Telemetry sidecar (Grafana Alloy)</name>
+  <description>Receives the edge node's OTLP logs and traces on 127.0.0.1:4317/:4318, scrapes its Prometheus metrics on 127.0.0.1:9090, buffers to disk within a hard cap while the box is offline, and forwards everything to the cloud telemetry ingest. Holds no Grafana Cloud credentials.</description>
+
+  <executable>%BASE%\..\artifacts\alloy\alloy.exe</executable>
+
+  <!--
+    The stability.level flag is REQUIRED, not optional: the disk buffer
+    (otelcol.storage.file in alloy\config.alloy) is a public-preview component and
+    Alloy refuses to start without it. Dropping that flag turns the offline buffer
+    into a startup crash-loop.
+
+    storage.path is Alloy's OWN component state, separate from the telemetry
+    buffer; the buffer lives under LAGUNA_TELEMETRY_BUFFER_DIR.
+
+    disable-reporting stops the anonymous usage ping to Grafana: pointless on a box
+    that is offline half the time, and one less outbound call to explain.
+  -->
+  <arguments>run --stability.level=public-preview --disable-reporting --server.http.listen-addr=127.0.0.1:12345 --storage.path="%BASE%\..\alloy-data\wal" "%BASE%\..\alloy\config.alloy"</arguments>
+  <workingdirectory>%BASE%\..\artifacts\alloy</workingdirectory>
+
+  <!--
+    DELIBERATELY no dependency, in either direction.
+
+    Windows refuses to start a service whose dependency failed, so making
+    laguna-edge-node depend on this one would let a broken telemetry sidecar keep
+    the POS down. Telemetry must never be able to do that. The app tolerates the
+    collector being absent (its OTLP exporter just fails in the background), and
+    Alloy tolerates the app being absent (the scrape fails until it is back), so
+    the two can start in any order.
+  -->
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="10 sec"/>
+  <stoptimeout>30 sec</stoptimeout>
+
+  <!--
+    All config comes from MACHINE env vars written by scripts\install.ps1 from
+    env\alloy.env, so this committed XML holds no per-box values and no secrets.
+    The node key is not an env var at all: Alloy reads it from the file named by
+    LAGUNA_NODE_KEY_FILE.
+  -->
+
+  <logpath>%BASE%\..\logs</logpath>
+  <!-- Alloy's own diagnostics only; the telemetry it forwards never lands here. -->
+  <log mode="roll-by-size">
+    <sizeThreshold>5120</sizeThreshold>
+    <keepFiles>4</keepFiles>
+  </log>
+</service>

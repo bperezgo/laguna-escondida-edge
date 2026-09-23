@@ -134,10 +134,108 @@ if (Test-Path $PgDir) {
 # Read/Execute on services\ (inheritable, so the wrapper exe copied in step 2 inherits it).
 & icacls $Services /grant '*S-1-5-20:(OI)(CI)RX' /T /C /Q | Out-Null
 
+# --- 1d. Stage the telemetry sidecar config (optional) ----------------------------
+# The Alloy sidecar is OPT-IN: no env\alloy.env means no telemetry service, and the box
+# behaves exactly as it did before. When the file IS present we export its LAGUNA_* vars
+# as MACHINE env vars (the same mechanism Caddy's {$LAGUNA_SITE_ADDR} uses) so the service
+# picks them up, and write the node key to a locked-down file instead of an env var.
+$AlloyEnv    = Join-Path $Root 'env\alloy.env'
+$InstallAlloy = Test-Path $AlloyEnv
+if (-not $InstallAlloy) {
+  Write-Host "No env\alloy.env -- skipping the telemetry sidecar (copy env\alloy.env.example to enable it)."
+} else {
+  $alloyCfg = @{}
+  foreach ($line in Get-Content $AlloyEnv) {
+    $t = $line.Trim()
+    if (-not $t -or $t.StartsWith('#')) { continue }
+    $kv = $t -split '=', 2
+    if ($kv.Count -eq 2) { $alloyCfg[$kv[0].Trim()] = $kv[1].Trim() }
+  }
+
+  $NodeKey = $alloyCfg['LAGUNA_NODE_KEY']
+  if (-not $NodeKey -or $NodeKey -eq 'CHANGE_ME') {
+    throw "env\alloy.env must set LAGUNA_NODE_KEY (same value as NODE_SYNC_KEY in env\edge-node.env)."
+  }
+  if (-not $alloyCfg['LAGUNA_TELEMETRY_INGEST_URL']) {
+    throw "env\alloy.env must set LAGUNA_TELEMETRY_INGEST_URL (the cloud backend's /api/telemetry base URL)."
+  }
+
+  # Identity preflight. Metrics are stamped by Alloy and logs/traces by the app, so if
+  # these disagree the same box shows up as two in Grafana. Read the app's own env and
+  # compare rather than trusting that both files were edited together.
+  $nodeCfg = @{}
+  foreach ($line in Get-Content $EnvSrc) {
+    $t = $line.Trim()
+    if (-not $t -or $t.StartsWith('#')) { continue }
+    $kv = $t -split '=', 2
+    if ($kv.Count -eq 2) { $nodeCfg[$kv[0].Trim()] = $kv[1].Trim() }
+  }
+  # NODE_ID is DERIVED (a uuid v5 of organization + mode) when edge-node.env leaves it
+  # blank, and that derived value is what the app stamps on its logs and traces. Alloy
+  # cannot reproduce it, so a telemetry box has to pin the id explicitly or its metrics
+  # will never line up with its logs.
+  if (-not $nodeCfg['NODE_ID']) {
+    throw ("env\edge-node.env must set NODE_ID explicitly when the telemetry sidecar is enabled " +
+           "(it is otherwise derived inside the app and Alloy cannot know the value). " +
+           "Pick a stable id for this box and set the SAME value as LAGUNA_NODE_ID in env\alloy.env.")
+  }
+  if ($alloyCfg['LAGUNA_NODE_ID'] -ne $nodeCfg['NODE_ID']) {
+    throw "LAGUNA_NODE_ID ('$($alloyCfg['LAGUNA_NODE_ID'])') must equal NODE_ID ('$($nodeCfg['NODE_ID'])') in env\edge-node.env."
+  }
+  if ($alloyCfg['LAGUNA_ORGANIZATION_ID'] -ne $nodeCfg['ORGANIZATION_ID']) {
+    throw "LAGUNA_ORGANIZATION_ID ('$($alloyCfg['LAGUNA_ORGANIZATION_ID'])') must equal ORGANIZATION_ID ('$($nodeCfg['ORGANIZATION_ID'])') in env\edge-node.env."
+  }
+  if ($nodeCfg['NODE_SYNC_KEY'] -and $NodeKey -ne $nodeCfg['NODE_SYNC_KEY']) {
+    throw "LAGUNA_NODE_KEY must equal NODE_SYNC_KEY in env\edge-node.env -- the cloud matches both against one key."
+  }
+
+  # Write the node key. WriteAllText (not Set-Content) on purpose: it emits no BOM and no
+  # trailing newline, either of which would travel into the X-Node-Key header and make the
+  # cloud reject every export with a 401 that looks like a wrong key.
+  $KeyFile = Join-Path $Root 'env\alloy-node-key'
+  [IO.File]::WriteAllText($KeyFile, $NodeKey)
+  # Only the service account (LocalSystem, S-1-5-18) and Administrators (S-1-5-32-544).
+  # Well-known SIDs so this works on non-English Windows.
+  & icacls $KeyFile /inheritance:r /grant '*S-1-5-18:(R)' '*S-1-5-32-544:(F)' /C /Q | Out-Null
+
+  $BufferDir = $alloyCfg['LAGUNA_TELEMETRY_BUFFER_DIR']
+  if (-not $BufferDir) { $BufferDir = Join-Path $Root 'alloy-data\buffer' }
+  New-Item -ItemType Directory -Force -Path $BufferDir, (Join-Path $Root 'alloy-data\wal') | Out-Null
+
+  # Export every LAGUNA_* setting as a machine env var. The key itself is deliberately
+  # NOT exported -- the whole point of the file above is to keep it out of the
+  # environment, where any process on the box could read it.
+  # LAGUNA_* only: a typo'd key in alloy.env must not be able to set an arbitrary
+  # machine-wide environment variable (PATH, say) on the box.
+  foreach ($k in $alloyCfg.Keys) {
+    if ($k -eq 'LAGUNA_NODE_KEY' -or $k -notlike 'LAGUNA_*') { continue }
+    [Environment]::SetEnvironmentVariable($k, $alloyCfg[$k], 'Machine')
+    Set-Item -Path "env:$k" -Value $alloyCfg[$k]
+  }
+  [Environment]::SetEnvironmentVariable('LAGUNA_NODE_KEY_FILE',        $KeyFile,   'Machine')
+  [Environment]::SetEnvironmentVariable('LAGUNA_TELEMETRY_BUFFER_DIR', $BufferDir, 'Machine')
+  $env:LAGUNA_NODE_KEY_FILE        = $KeyFile
+  $env:LAGUNA_TELEMETRY_BUFFER_DIR = $BufferDir
+
+  # Validate before the service ever starts, so a bad edit is a clear message here
+  # rather than a crash-looping service. Same spirit as `caddy validate`.
+  $AlloyExe = Join-Path $Root 'artifacts\alloy\alloy.exe'
+  if (-not (Test-Path $AlloyExe)) {
+    throw "Missing $AlloyExe. Run scripts\fetch-artifacts.ps1 -Only alloy first."
+  }
+  & $AlloyExe validate --stability.level=public-preview (Join-Path $Root 'alloy\config.alloy') | Out-Host
+  if ($LASTEXITCODE -ne 0) { throw "alloy\config.alloy failed validation; fix it before installing." }
+  Write-Host "Telemetry sidecar config OK -> $($alloyCfg['LAGUNA_TELEMETRY_INGEST_URL']) (node $($alloyCfg['LAGUNA_NODE_ID']))"
+}
+
 # --- 2. Install services in dependency order --------------------------------------
 # Postgres first; Caddy last. The <depend> entries in each XML also enforce ordering.
 # WinSW finds "<name>.xml" automatically by matching the copied exe's basename.
 $order = 'postgres','edge-node','next','caddy'
+# Alloy first so the OTLP ports are already listening when edge-node starts exporting.
+# It has no <depend> in either direction (see services\alloy.xml), so SCM is free to
+# order it however it likes -- this only tidies up the boot sequence.
+if ($InstallAlloy) { $order = @('alloy') + $order }
 
 foreach ($name in $order) {
   $xml = Join-Path $Services "$name.xml"
@@ -215,6 +313,33 @@ if ($caddyState -ne 'Running') {
 }
 Write-Host "laguna-caddy is Running."
 
+# --- 3c. Verify the telemetry sidecar came up and is listening ---------------------
+# The sidecar failing is not a POS outage (nothing depends on it), which is exactly why
+# it would otherwise fail silently and nobody would notice until telemetry was missing
+# for a week. Check it here, but WARN rather than throw: a broken sidecar must never
+# fail an install that otherwise produced a working till.
+if ($InstallAlloy) {
+  Start-Sleep -Seconds 3
+  $alloyState = (Get-Service laguna-alloy -ErrorAction SilentlyContinue).Status
+  if ($alloyState -ne 'Running') {
+    $logTail = ''
+    $errLog = Join-Path $Logs 'alloy.err.log'
+    if (Test-Path $errLog) { $logTail = (Get-Content $errLog -Tail 15) -join "`n" }
+    Write-Warning "laguna-alloy is '$alloyState', not Running. Telemetry will not reach the cloud; the POS is unaffected.`n--- alloy.err.log ---`n$logTail"
+  } else {
+    # Listening on the localhost OTLP ports is the real proof it is usable, not just alive.
+    $otlpPorts = 4317, 4318
+    $missing = @($otlpPorts | Where-Object {
+      -not (Get-NetTCPConnection -State Listen -LocalPort $_ -ErrorAction SilentlyContinue)
+    })
+    if ($missing) {
+      Write-Warning "laguna-alloy is Running but not listening on: $($missing -join ', '). Check logs\alloy.err.log."
+    } else {
+      Write-Host "laguna-alloy is Running and listening on 127.0.0.1:4317 / :4318."
+    }
+  }
+}
+
 # --- 4. Windows Firewall: allow :443/:80 ONLY from known tablet IPs ----------------
 $ruleName = 'Laguna POS - Caddy (LAN tablets)'
 Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
@@ -253,3 +378,8 @@ Write-Host "Done. Next steps:"
 Write-Host "  - Dev PCs / tablets: install $RootExport as a Trusted Root CA, then open https://$primaryHost$altNote"
 Write-Host "      Windows client:  Import-Certificate -FilePath laguna-root-ca.crt -CertStoreLocation Cert:\LocalMachine\Root"
 Write-Host "  - See provisioning\README.md and certs\README.md"
+if ($InstallAlloy) {
+  Write-Host "  - Telemetry: set OBSERVABILITY_ENABLED=true and OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317"
+  Write-Host "      in env\edge-node.env, then: .\scripts\update.ps1 -Service edge-node"
+  Write-Host "      See docs\TELEMETRY_RUNBOOK.md"
+}

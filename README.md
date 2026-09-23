@@ -21,28 +21,34 @@ Android tablets (LAN)
    │  127.0.0.1:8080   (server-side, inside Next's /api/* route handlers)
    ▼
  Go edge node (APP_MODE=edge; ticket printing built in) ── cloud sync / S3 / invoicing (online)
-   │
-   ▼
- Postgres (127.0.0.1:5432)
+   │                        │
+   │                        └─ OTLP 127.0.0.1:4317 ─▶ Alloy ──▶ cloud telemetry ingest (online)
+   ▼                                                   ▲
+ Postgres (127.0.0.1:5432)                             └─ scrapes 127.0.0.1:9090/metrics
 ```
 
 Everything except Caddy binds to `127.0.0.1`, so only Caddy is reachable from the network.
+Telemetry is **opt-in** and runs on its own path, separate from the business-data sync: see
+[`docs/TELEMETRY_RUNBOOK.md`](docs/TELEMETRY_RUNBOOK.md).
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `Caddyfile` | LAN HTTPS reverse proxy (the only exposed service) |
+| `alloy/config.alloy` | Telemetry sidecar pipeline (OTLP in + metrics scrape → cloud ingest) |
 | `services/*.xml` | WinSW Windows-service definitions (one per process) — see `services/README.md` |
 | `scripts/install.ps1` | Register all services + stage edge-node `.env` + firewall rule (run as Admin) |
 | `scripts/uninstall.ps1` | Remove all services + firewall rule |
 | `scripts/fetch-artifacts.ps1` | Download off-the-shelf binaries (Caddy, Node, Postgres) into `artifacts/` |
 | `scripts/update.ps1` | Swap one service to a new pinned version |
 | `env/edge-node.env.example` | Template for the backend's per-box config; copy to `env/edge-node.env` (gitignored) |
+| `env/alloy.env.example` | Template for the telemetry sidecar; copy to `env/alloy.env` to ENABLE telemetry (omit it and there is no sidecar) |
 | `versions.json` | Pinned versions (WinSW, Caddy, Node, Postgres, app artifacts) |
 | `certs/` | Exported Caddy root CA for tablets — see `certs/README.md` |
 | `provisioning/` | Android tablet setup runbook |
 | `artifacts/` | (gitignored) fetched binaries + Next bundle land here |
+| `alloy-data/` | (gitignored) Alloy's disk telemetry buffer + component state |
 
 ## Deploy (on the Windows box)
 
@@ -50,7 +56,7 @@ Everything except Caddy binds to `127.0.0.1`, so only Caddy is reachable from th
 > different path, update the absolute `storage` path in `Caddyfile`.
 
 ```powershell
-# 1. Get the binaries (Caddy, Node, Postgres, the 3 app artifacts) into artifacts\
+# 1. Get the binaries (Caddy, Alloy, Node, Postgres, the app artifacts) into artifacts\
 .\scripts\fetch-artifacts.ps1
 
 # 2. Register services + lock the firewall to your tablet IPs (elevated PowerShell)
