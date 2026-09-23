@@ -16,8 +16,9 @@ it at the restaurant.
 Get-Service laguna-* | Sort-Object Name | Format-Table Name, Status, StartType
 ```
 
-All four services have `onfailure action="restart" delay="10 sec"` in their WinSW XML, so a
-crashed process is auto-restarted. A service that keeps **flapping** (restarting in a loop) is
+All services have `onfailure action="restart" delay="10 sec"` in their WinSW XML, so a
+crashed process is auto-restarted. (`laguna-alloy`, the telemetry sidecar, only exists on
+boxes where telemetry is enabled — see [`TELEMETRY_RUNBOOK.md`](TELEMETRY_RUNBOOK.md).) A service that keeps **flapping** (restarting in a loop) is
 the thing to catch — you'll see it as repeated start/stop lines in the wrapper log (§2) and a
 recent `StartTime`:
 
@@ -34,7 +35,10 @@ Get-CimInstance Win32_Service -Filter "Name like 'laguna-%'" |
 
 ## 2. Logs — where they are and how to read them
 
-WinSW writes per-service logs into `C:\laguna-edge\logs\`, rolling by size (10 MB, 8 files kept).
+WinSW writes per-service logs into `C:\laguna-edge\logs\`, rolling by size. Caps differ:
+postgres/next/caddy keep **8 × 10 MB** per stream; edge-node and alloy keep **4 × 5 MB**,
+because those two ship their logs to the cloud and the on-box copy is only an offline tail.
+Either way the total is bounded — WinSW deletes the oldest file past `keepFiles`.
 File base name = the service's wrapper name:
 
 | File pattern              | What's in it                                         |
@@ -43,7 +47,7 @@ File base name = the service's wrapper name:
 | `<svc>.err.log`           | the process's stderr (errors, stack traces)          |
 | `<svc>.wrapper.log`       | WinSW itself — start/stop/restart events             |
 
-where `<svc>` ∈ `postgres`, `edge-node`, `next`, `caddy`. Confirm the actual names once:
+where `<svc>` ∈ `postgres`, `edge-node`, `next`, `caddy`, `alloy`. Confirm the actual names once:
 
 ```powershell
 Get-ChildItem C:\laguna-edge\logs | Sort-Object LastWriteTime -Desc | Format-Table Name, Length, LastWriteTime
@@ -75,6 +79,10 @@ What "normal" looks like per service:
   (broken `node_modules` junctions → rebuild with `update.ps1 -Service next`).
 - **caddy** — `serving initial configuration`. Watch for: `tls`/cert errors, upstream
   `dial tcp 127.0.0.1:3000: connectex` (Next is down).
+- **alloy** (telemetry boxes only) — quiet is normal; it runs at `warn`. Expected while the
+  box is offline: `Exporting failed. Will retry` — that is the disk buffer doing its job.
+  Watch for: `sending queue is full` (the buffer hit its cap and is now **discarding new**
+  telemetry), and `401`/`403` from the ingest (node key mismatch — see the runbook).
 
 ---
 
@@ -96,12 +104,17 @@ filling, will take the box down.
 
 ```powershell
 "{0,-16} {1,8:N1} MB" -f 'logs',       ((Get-ChildItem C:\laguna-edge\logs       -Recurse | Measure-Object Length -Sum).Sum/1MB)
+"{0,-16} {1,8:N1} MB" -f 'alloy-buffer',((Get-ChildItem C:\laguna-edge\alloy-data -Recurse -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum/1MB)
 "{0,-16} {1,8:N1} MB" -f 'postgres-data',((Get-ChildItem C:\laguna-edge\artifacts\postgres\data -Recurse | Measure-Object Length -Sum).Sum/1MB)
 "{0,-16} {1,8:N1} MB" -f 'caddy-data',  ((Get-ChildItem C:\laguna-edge\caddy-data -Recurse | Measure-Object Length -Sum).Sum/1MB)
 Get-PSDrive C | Select-Object Used, Free
 ```
 
-- `logs\` is self-capping (8 × 10 MB per stream) — fine.
+- `logs\` is self-capping (see §2) — fine.
+- `alloy-data\` is capped by `LAGUNA_TELEMETRY_BUFFER_BYTES`, but **the cap is per signal
+  and the buffer file allocates in doublings**, so budget ~6× the configured number
+  (32 MiB default ≈ 192 MiB worst case). If it is bigger than that, something is
+  misconfigured — see the runbook.
 - `caddy-data\` is tiny but **precious**: it holds the internal CA root. If it's ever lost, the
   root cert changes and **every tablet must re-trust HTTPS**. Back it up (see the runbook /
   TROUBLESHOOTING).
@@ -141,6 +154,11 @@ $bad    = @()
 # 1. all services Running?
 foreach ($s in 'laguna-postgres','laguna-edge-node','laguna-next','laguna-caddy') {
   if ((Get-Service $s).Status -ne 'Running') { $bad += "$s not Running" }
+}
+# Telemetry sidecar: only check it on boxes where it is installed. Its being down is not
+# a POS outage, so it is reported but must not be treated as one.
+if (Get-Service laguna-alloy -ErrorAction SilentlyContinue) {
+  if ((Get-Service laguna-alloy).Status -ne 'Running') { $bad += "laguna-alloy not Running (telemetry only)" }
 }
 # 2. edge path answers 200 on /signin?
 $code = (curl.exe -k -s -o NUL -w "%{http_code}" https://192.168.0.123/signin)

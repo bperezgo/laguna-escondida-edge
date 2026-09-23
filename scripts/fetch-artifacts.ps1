@@ -2,7 +2,7 @@
   fetch-artifacts.ps1 -- download the pinned binaries/bundles into artifacts\.
   Reads versions.json.
 
-  INFRASTRUCTURE (Caddy, Node, Postgres) are public downloads and are implemented
+  INFRASTRUCTURE (Caddy, Alloy, Node, Postgres) are public downloads and are implemented
   below. APP artifacts (edge-node, next) are built locally from the sibling app repos
   by scripts\build-artifacts.ps1 (printing is built into edge-node — no separate service).
 
@@ -12,8 +12,8 @@
 [CmdletBinding()]
 param(
   # Which artifacts to fetch. Default: the infrastructure ones that are public.
-  [ValidateSet('caddy','node','postgres','edge-node','next')]
-  [string[]] $Only = @('caddy','node','postgres'),
+  [ValidateSet('caddy','alloy','node','postgres','edge-node','next')]
+  [string[]] $Only = @('caddy','alloy','node','postgres'),
   [switch]   $Force   # re-download even if the target already exists
 )
 
@@ -48,6 +48,24 @@ if (Want 'caddy') {
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
     Copy-Item (Join-Path $ex 'caddy.exe') (Join-Path $dest 'caddy.exe') -Force
     Write-Host "  -> $dest\caddy.exe" -ForegroundColor Green
+  }
+}
+
+# --- Grafana Alloy (telemetry sidecar) --------------------------------------------
+if (Want 'alloy') {
+  Step "Grafana Alloy $($v.alloy)"
+  $dest = Join-Path $Artifacts 'alloy'
+  if ((Test-Path (Join-Path $dest 'alloy.exe')) -and -not $Force) {
+    Write-Host "  present -- skip."
+  } else {
+    # The zip holds a single 'alloy-windows-amd64.exe'; rename it to alloy.exe so
+    # services\alloy.xml can point at a stable path across version bumps.
+    $ex  = Get-Zip "https://github.com/grafana/alloy/releases/download/v$($v.alloy)/alloy-windows-amd64.exe.zip" "alloy.zip"
+    $src = Join-Path $ex 'alloy-windows-amd64.exe'
+    if (-not (Test-Path $src)) { throw "Unexpected Alloy archive layout under $ex" }
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    Copy-Item $src (Join-Path $dest 'alloy.exe') -Force
+    Write-Host "  -> $dest\alloy.exe" -ForegroundColor Green
   }
 }
 
@@ -95,4 +113,4 @@ foreach ($a in 'edge-node','next') {
   }
 }
 
-Write-Host "`nDone. Fetched: $(( $Only | Where-Object { $_ -in 'caddy','node','postgres' }) -join ', ')" -ForegroundColor Green
+Write-Host "`nDone. Fetched: $(( $Only | Where-Object { $_ -in 'caddy','alloy','node','postgres' }) -join ', ')" -ForegroundColor Green

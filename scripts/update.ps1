@@ -7,10 +7,11 @@
 
   Usage:  .\scripts\update.ps1 -Service next
           .\scripts\update.ps1 -Service edge-node
+          .\scripts\update.ps1 -Service alloy
 #>
 param(
   [Parameter(Mandatory)]
-  [ValidateSet('edge-node','next','caddy','postgres')]
+  [ValidateSet('edge-node','next','caddy','postgres','alloy')]
   [string] $Service
 )
 $ErrorActionPreference = 'Stop'
@@ -33,6 +34,13 @@ if ($Service -in 'edge-node','next') {
 if ($Service -eq 'edge-node') {
   $envSrc = Join-Path $Root 'env\edge-node.env'
   if (Test-Path $envSrc) { Copy-Item $envSrc (Join-Path $Root 'artifacts\edge-node\.env') -Force }
+}
+
+# Alloy reads alloy\config.alloy live, but its per-box settings are MACHINE env vars that
+# only install.ps1 writes. Validate the config here; re-run install.ps1 to apply env edits.
+if ($Service -eq 'alloy') {
+  & (Join-Path $Root 'artifacts\alloy\alloy.exe') validate --stability.level=public-preview (Join-Path $Root 'alloy\config.alloy') | Out-Host
+  if ($LASTEXITCODE -ne 0) { throw "alloy\config.alloy failed validation; not restarting the sidecar." }
 }
 
 Write-Host "Starting $Service ..."

@@ -7,10 +7,14 @@
 
 # Per-box service config with secrets (templates *.env.example are committed)
 /env/*.env
+# The node key Alloy reads (written by install.ps1 from env/alloy.env) — no .env
+# suffix, so it needs its own rule.
+/env/alloy-node-key
 
 # Runtime
 /logs/
 /caddy-data/
+/alloy-data/
 
 # Exported CA cert (regenerated per box)
 /certs/*.crt

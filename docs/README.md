@@ -13,6 +13,7 @@ and fix the box from these alone. Install root is **`C:\laguna-edge`**, LAN IP
 | Just installed/updated — confirm it's correct | [`VALIDATION.md`](VALIDATION.md) |
 | Box is live — watch health, read logs, set alerts | [`MONITORING.md`](MONITORING.md) |
 | Something is broken — symptom → fix | [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) |
+| Shipping this box's logs/traces/metrics to Grafana Cloud | [`TELEMETRY_RUNBOOK.md`](TELEMETRY_RUNBOOK.md) |
 
 ## Background / design (the "why")
 
@@ -32,3 +33,8 @@ tablets ──HTTPS:443──> Caddy ──:3000──> Next.js ──:8080─�
 Four Windows services (`laguna-postgres`, `laguna-edge-node`, `laguna-next`, `laguna-caddy`),
 started in that order, each auto-restarting on failure. Config + secrets live in
 `env\edge-node.env`; logs in `logs\`; the TLS CA root in `caddy-data\` (back it up).
+
+A fifth service, `laguna-alloy`, appears only on boxes with telemetry enabled. It sits
+outside the dependency chain on purpose — nothing depends on it, so it can never hold up
+the till — and ships logs/traces/metrics to the cloud. See
+[`TELEMETRY_RUNBOOK.md`](TELEMETRY_RUNBOOK.md).

@@ -21,8 +21,19 @@
   <stoptimeout>30 sec</stoptimeout>
 
   <logpath>%BASE%\..\logs</logpath>
+  <!--
+    STDOUT POLICY. The app logs to stdout unconditionally (a JSON slog handler) AND,
+    when OBSERVABILITY_ENABLED=true, to the sidecar over OTLP. On a headless box
+    nobody reads stdout day to day, so the cloud copy is the real one and this is a
+    small on-box tail for when the box is offline or the sidecar is down.
+
+    Capped, not discarded: 4 files x 5 MB per stream = 20 MB for stdout and 20 MB for
+    stderr, so the pair can never exceed 40 MB no matter how long the service runs.
+    WinSW deletes the oldest file past keepFiles, which is what makes the bound hold
+    rather than merely slowing the growth.
+  -->
   <log mode="roll-by-size">
-    <sizeThreshold>10240</sizeThreshold>
-    <keepFiles>8</keepFiles>
+    <sizeThreshold>5120</sizeThreshold>
+    <keepFiles>4</keepFiles>
   </log>
 </service>
