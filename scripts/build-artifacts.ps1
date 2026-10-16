@@ -7,6 +7,9 @@
 
   Off-the-shelf binaries (Caddy, Node, Postgres) come from scripts\fetch-artifacts.ps1, not here.
 
+  DEVELOPER FALLBACK: production boxes install CI-built GitHub Releases with
+  scripts\fetch-artifacts.ps1. Use this only to run unreleased code.
+
   Run:  .\scripts\build-artifacts.ps1                         # build both
         .\scripts\build-artifacts.ps1 -Only edge-node         # just one
         .\scripts\build-artifacts.ps1 -BackendRepo C:\src\be -FrontendRepo C:\src\fe
@@ -74,12 +77,12 @@ function Read-DotEnv($path) {
   }
   return $map
 }
-# Record what we built into versions.json (traceability for a single-site install).
+# Record what we built. versions.json pins RELEASE TAGS (fetch-artifacts.ps1 installs them), so
+# a local build is NOT written there; it is recorded in artifacts\<key>\RELEASE as
+# "local-<sha>", which fetch-artifacts.ps1 sees as "not the pinned release" and replaces on
+# its next run.
 function Stamp($key, $sha) {
-  $vf = Join-Path $Root 'versions.json'
-  $v  = Get-Content $vf -Raw | ConvertFrom-Json
-  $v.artifacts.$key.version = $sha
-  ($v | ConvertTo-Json -Depth 10) | Set-Content $vf -Encoding utf8
+  Set-Content (Join-Path (Join-Path $Artifacts $key) 'RELEASE') "local-$sha" -Encoding ascii
 }
 
 # --- edge-node (Go) ----------------------------------------------------------------
@@ -99,7 +102,9 @@ if (Want 'edge-node') {
     # CGO off => static build, no gcc needed (matches the repo's Dockerfile). GOOS/GOARCH
     # default to the host (windows/amd64) but we set them explicitly for determinism.
     $env:CGO_ENABLED = '0'; $env:GOOS = 'windows'; $env:GOARCH = 'amd64'
-    & go build -ldflags '-s -w' -o $out ./cmd
+    # Version shows up as /api/edge/status .version (release builds stamp the tag instead).
+    $ver = "local-$(GitSha $BackendRepo)"
+    & go build -ldflags "-s -w -X laguna-escondida/backend/internal/platform/buildinfo.Version=$ver" -o $out ./cmd
     if ($LASTEXITCODE -ne 0) { throw "go build failed ($LASTEXITCODE)" }
   } finally {
     Pop-Location

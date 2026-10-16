@@ -40,7 +40,7 @@ Telemetry is **opt-in** and runs on its own path, separate from the business-dat
 | `services/*.xml` | WinSW Windows-service definitions (one per process) — see `services/README.md` |
 | `scripts/install.ps1` | Register all services + stage edge-node `.env` + firewall rule (run as Admin) |
 | `scripts/uninstall.ps1` | Remove all services + firewall rule |
-| `scripts/fetch-artifacts.ps1` | Download off-the-shelf binaries (Caddy, Node, Postgres) into `artifacts/` |
+| `scripts/fetch-artifacts.ps1` | Download off-the-shelf binaries (Caddy, Alloy, Node, Postgres) and the sha256-verified app releases (edge-node, next) into `artifacts/` |
 | `scripts/update.ps1` | Swap one service to a new pinned version |
 | `env/edge-node.env.example` | Template for the backend's per-box config; copy to `env/edge-node.env` (gitignored) |
 | `env/alloy.env.example` | Template for the telemetry sidecar; copy to `env/alloy.env` to ENABLE telemetry (omit it and there is no sidecar) |

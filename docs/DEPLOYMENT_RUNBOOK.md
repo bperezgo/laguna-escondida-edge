@@ -94,19 +94,38 @@ This does NOT create the Postgres data dir — step 5 does that.
 
 ---
 
-## 4. Build the two app artifacts (on this box, at this path)
+## 4. Install the two app artifacts (downloaded, not built)
+
+`fetch-artifacts.ps1` (step 3) also downloads the app builds: the GitHub Release of each app
+repo pinned in `versions.json` (`artifacts.edge-node.version`, `artifacts.next.version` are
+release **tags**), each checked against its `.sha256` and refused on mismatch.
 
 ```powershell
 cd C:\laguna-edge
-.\scripts\build-artifacts.ps1
-# If the app repos are elsewhere:
-# .\scripts\build-artifacts.ps1 -BackendRepo C:\src\laguna-escondida-backend `
-#                               -FrontendRepo C:\src\laguna-escondida-frontend
+.\scripts\fetch-artifacts.ps1 -Only edge-node,next
+# -> artifacts\edge-node\edge-node.exe, artifacts\next\server.js  (+ RELEASE = installed tag)
 ```
 
-Produces `artifacts\edge-node\edge-node.exe` and `artifacts\next\server.js` (+ static assets,
-real `node_modules`). The frontend's API URL is baked to `http://127.0.0.1:8080/api`. The built
-git SHAs are stamped back into `versions.json` for traceability.
+No Go, pnpm, git or app source is needed on the box. The frontend's API URL is baked to
+`http://127.0.0.1:8080/api` and the order-action PIN to `1234` by the frontend's release
+workflow.
+
+Developer fallback for **unreleased** code (needs Go + pnpm + Developer Mode, and must be run at
+the final install path): `.\scripts\build-artifacts.ps1`. A local build records
+`local-<sha>` in `artifacts\<app>\RELEASE`, so the next `fetch-artifacts.ps1` replaces it
+with the pinned release.
+
+### Cutting a release (developer)
+
+1. Tag the app repo: `git tag v1.2.0 && git push origin v1.2.0`.
+   - backend: CI pushes the cloud image to ECR **and** attaches
+     `edge-node-windows-amd64-v1.2.0.zip` (+ `.sha256`) to the GitHub Release.
+   - frontend: CI attaches `next-standalone-windows-v1.2.0.zip` (+ `.sha256`), after a
+     relocated smoke test.
+2. Deploy the cloud first (backend), then bump the tag in this repo's `versions.json`, commit,
+   and on each box: `git pull` then `.\scripts\update.ps1 -Service edge-node` (or `next`).
+   `update.ps1` downloads and verifies *before* stopping the service; `GET /api/edge/status`
+   reports the running backend tag in `version`.
 
 ---
 
