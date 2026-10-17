@@ -1,29 +1,17 @@
-# Caddyfile.lan — quick plain-HTTP LAN exposure of the app on port 3001.
-#
-# This is SEPARATE from the production `Caddyfile` (which serves the POS on 443
-# with an internal CA). Use this for dev / sharing the port-3001 app on the LAN.
-#
-# Run it (foreground) from the repo root:
+# Plain-HTTP LAN exposure of a dev app on port 3001. Not the production Caddyfile.
 #   .\artifacts\caddy\caddy.exe run --config .\Caddyfile.lan --adapter caddyfile
-#
-# Then on any device on this network, open:   http://192.168.0.123
 {
-	# No automatic HTTPS — we're intentionally serving plain HTTP on the LAN.
 	auto_https off
 }
 
-# Listen on port 80 on every interface, plain HTTP.
 :80 {
-	# Do NOT compress Server-Sent Events — a streaming compressor buffers the small
-	# SSE frames (order events + heartbeats) so they never reach the browser. Exclude
-	# the SSE path; compress everything else. (See Caddyfile for the full write-up.)
+	# Compressing SSE buffers the frames and the stream stays empty.
 	@notsse {
 		not path /api/sse/*
 	}
 	encode @notsse zstd gzip
 
-	# Proxy to the app bound locally on 3001 (it listens on [::]).
 	reverse_proxy localhost:3001 {
-		flush_interval -1 # stream SSE / live responses immediately
+		flush_interval -1
 	}
 }

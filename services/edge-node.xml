@@ -5,15 +5,9 @@
 
   <executable>%BASE%\..\artifacts\edge-node\edge-node.exe</executable>
 
-  <!-- The binary loads its config from a .env file in its WORKING DIRECTORY
-       (cmd/main.go: godotenv.Load()). scripts\install.ps1 copies
-       env\edge-node.env -> artifacts\edge-node\.env, so set the working dir here.
-       All app config (ports, DB, secrets, sync, printer) lives in that .env —
-       see env\edge-node.env.example. We deliberately keep NO <env> here so there
-       is a single source of truth and no secrets in committed XML. -->
+  <!-- Config is the .env in the working dir, staged by scripts\install.ps1. No <env> here. -->
   <workingdirectory>%BASE%\..\artifacts\edge-node</workingdirectory>
 
-  <!-- Boot order: must start after Postgres. -->
   <depend>laguna-postgres</depend>
 
   <startmode>Automatic</startmode>
@@ -21,17 +15,7 @@
   <stoptimeout>30 sec</stoptimeout>
 
   <logpath>%BASE%\..\logs</logpath>
-  <!--
-    STDOUT POLICY. The app logs to stdout unconditionally (a JSON slog handler) AND,
-    when OBSERVABILITY_ENABLED=true, to the sidecar over OTLP. On a headless box
-    nobody reads stdout day to day, so the cloud copy is the real one and this is a
-    small on-box tail for when the box is offline or the sidecar is down.
-
-    Capped, not discarded: 4 files x 5 MB per stream = 20 MB for stdout and 20 MB for
-    stderr, so the pair can never exceed 40 MB no matter how long the service runs.
-    WinSW deletes the oldest file past keepFiles, which is what makes the bound hold
-    rather than merely slowing the growth.
-  -->
+  <!-- Small on-box tail; the cloud copy is the real one. Capped at 4 x 5 MB per stream. -->
   <log mode="roll-by-size">
     <sizeThreshold>5120</sizeThreshold>
     <keepFiles>4</keepFiles>

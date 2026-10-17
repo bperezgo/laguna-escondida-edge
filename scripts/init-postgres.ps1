@@ -64,15 +64,8 @@ Step "Starting a temporary server on 127.0.0.1:$Port"
 $startLog = Join-Path $Logs 'pg-init.log'
 $startOut = Join-Path $Logs 'pg-ctl-start.out'
 $startErr = Join-Path $Logs 'pg-ctl-start.err'
-# WINDOWS HANDLE-INHERITANCE TRAP: 'pg_ctl start' launches a DETACHED postgres server that
-# inherits pg_ctl's stdio handles. Any approach that makes PowerShell wait on those handles
-# deadlocks, because the server keeps them open long after pg_ctl exits:
-#   - `pg_ctl start | Out-Host`           -> server holds the pipe's write end; reader never EOFs.
-#   - `Start-Process -Wait -Redirect...`  -> -Wait also waits for the redirected streams to EOF.
-# Fix: launch NON-blocking (no -Wait), send pg_ctl's stdio to FILES (never a PS pipe), then poll
-# pg_isready ourselves until the server accepts connections. Pass args as ONE pre-quoted string
-# (Start-Process -ArgumentList does not reliably re-quote array elements containing spaces, which
-# would split "-p $Port -h 127.0.0.1" into separate tokens). No -w: we do the waiting via polling.
+# The detached server inherits pg_ctl's stdio, so piping or -Wait deadlocks. Redirect to files,
+# don't wait, and poll pg_isready. One pre-quoted arg string keeps "-p $Port -h ..." together.
 $startArgs = "-D `"$Data`" -l `"$startLog`" -o `"-p $Port -h 127.0.0.1`" start"
 Start-Process -FilePath $pgctl -ArgumentList $startArgs -NoNewWindow `
   -RedirectStandardOutput $startOut -RedirectStandardError $startErr | Out-Null
