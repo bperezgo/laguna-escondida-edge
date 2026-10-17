@@ -105,7 +105,7 @@ Write-Host "`n==> Up to date afterwards"
 Invoke-Updater $mfile
 Check (-not (Read-State 'update-available.json')) 'no offer for the installed version'
 
+Start-Service laguna-updater
 & (Join-Path $Root 'scripts\verify-install.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'verify-install failed after the updater apply' }
-Start-Service laguna-updater
 Write-Host "`nUpdater smoke test passed." -ForegroundColor Green
