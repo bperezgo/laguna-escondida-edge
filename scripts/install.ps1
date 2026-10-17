@@ -192,6 +192,17 @@ $order = 'postgres','edge-node','next','caddy'
 # Alloy first so OTLP is listening when edge-node starts exporting.
 if ($InstallAlloy) { $order = @('alloy') + $order }
 
+# On a re-run, stop everything first, dependents before what they depend on: SCM refuses to
+# stop laguna-postgres while laguna-edge-node is running, which left postgres.exe locked.
+foreach ($name in 'caddy','next','edge-node','postgres','alloy') {
+  $svcId = "laguna-$name"
+  if (-not (Get-CimInstance Win32_Service -Filter "Name='$svcId'" -ErrorAction SilentlyContinue)) { continue }
+  Write-Host "Stopping $svcId before reinstall"
+  & sc.exe stop $svcId | Out-Null
+  try { (Get-Service $svcId).WaitForStatus('Stopped', (New-TimeSpan -Seconds 30)) }
+  catch { Write-Warning "$svcId did not reach 'Stopped' within 30s." }
+}
+
 foreach ($name in $order) {
   $xml = Join-Path $Services "$name.xml"
   if (-not (Test-Path $xml)) { throw "Missing service definition: $xml" }
