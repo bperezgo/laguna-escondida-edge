@@ -43,6 +43,7 @@ Telemetry is **opt-in** and runs on its own path, separate from the business-dat
 | `scripts/verify-install.ps1` | Automated post-install check (services, edge-node version, Next, Caddy HTTPS); also run by the Windows install smoke test in CI |
 | `scripts/fetch-artifacts.ps1` | Download off-the-shelf binaries (Caddy, Alloy, Node, Postgres) and the sha256-verified app releases (edge-node, next) into `artifacts/` |
 | `scripts/update.ps1` | Swap one service to a new pinned version |
+| `scripts/release.sh` | (developer machine) Pin the latest app releases, check cloud-first, tag + publish an edge release with `manifest.json` |
 | `env/edge-node.env.example` | Template for the backend's per-box config; copy to `env/edge-node.env` (gitignored) |
 | `env/alloy.env.example` | Template for the telemetry sidecar; copy to `env/alloy.env` to ENABLE telemetry (omit it and there is no sidecar) |
 | `versions.json` | Pinned versions (WinSW, Caddy, Node, Postgres, app artifacts) |

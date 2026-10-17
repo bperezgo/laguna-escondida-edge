@@ -1,5 +1,5 @@
 ﻿{
-    "_comment": "Pinned versions of everything the edge appliance runs. scripts/fetch-artifacts.ps1 and scripts/install.ps1 read this. artifacts.*.version is a GitHub Release TAG of that repo (CI attaches the Windows build + .sha256). Bump a version here, then run scripts/update.ps1 -Service <name>.",
+    "_comment": "Pinned versions of everything the edge appliance runs. scripts/fetch-artifacts.ps1 and scripts/install.ps1 read this. artifacts.*.version is a GitHub Release TAG of that repo (CI attaches the Windows build + .sha256). The app pins are set by scripts/release.sh (do not edit them by hand); on a box, run scripts/update.ps1 -Service <name> after pulling.",
     "winsw": "2.12.0",
     "caddy": "2.8.4",
     "alloy": "1.19.2",

@@ -122,8 +122,19 @@ with the pinned release.
      `edge-node-windows-amd64-v1.2.0.zip` (+ `.sha256`) to the GitHub Release.
    - frontend: CI attaches `next-standalone-windows-v1.2.0.zip` (+ `.sha256`), after a
      relocated smoke test.
-2. Deploy the cloud first (backend), then bump the tag in this repo's `versions.json`, commit,
-   and on each box: `git pull` then `.\scripts\update.ps1 -Service edge-node` (or `next`).
+2. Deploy the cloud first: point `aws-infra/image-tags.json` `laguna` at the backend tag and
+   `cdk deploy bryan-dev-services`.
+3. Cut the edge release from your machine (git, gh, jq):
+   ```bash
+   scripts/release.sh --dry-run   # resolve + check only
+   scripts/release.sh             # latest app releases with a Windows asset, bump patch
+   scripts/release.sh --backend v1.2.0 --frontend v1.0.3 --version v1.1.0
+   ```
+   It refuses a backend newer than the cloud's `image-tags.json` pin and an app tag whose
+   release has no Windows asset (failed CI). Then it pins `versions.json`, commits, tags this
+   repo, and publishes a GitHub Release with `edge-vX.Y.Z.zip` (tracked files only, never
+   `env/` or `certs/`) and a `manifest.json` (every component's tag, URL and sha256).
+4. On each box: `git pull` then `.\scripts\update.ps1 -Service edge-node` (or `next`).
    `update.ps1` downloads and verifies *before* stopping the service; `GET /api/edge/status`
    reports the running backend tag in `version`.
 
