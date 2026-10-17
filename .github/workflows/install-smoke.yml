@@ -6,8 +6,8 @@ name: Install smoke test (Windows)
 #   -> update next + edge-node -> verify -> uninstall
 #
 # What it does NOT cover: a real LAN/tablet, local DNS, the printer, the cloud sync peer, and
-# Windows 10/11 specifics (runners are Windows Server). edge-node runs offline (no
-# CLOUD_SYNC_URL), which is a supported mode.
+# Windows 10/11 specifics (runners are Windows Server). edge-node points at an unreachable
+# cloud, i.e. it runs as a box with its WAN down, which must still serve the LAN.
 on:
   push:
     branches: [main]
@@ -103,7 +103,8 @@ jobs:
             DB_NAME = 'laguna_escondida'; DB_SSLMODE = 'disable'
             ORGANIZATION_ID = '00000000-0000-0000-0000-00000000c1c1'
             JWT_SECRET = [guid]::NewGuid().ToString('N'); ADMIN_API_KEY = [guid]::NewGuid().ToString('N')
-            CLOUD_SYNC_URL = ''; NODE_SYNC_KEY = ''
+            # Unreachable cloud = a box whose WAN is down: sync fails and queues, the LAN works.
+            CLOUD_SYNC_URL = 'http://127.0.0.1:9'; NODE_SYNC_KEY = 'ci-smoke-test'
             STORAGE_BUCKET = 'ci-smoke-test'; STORAGE_ACCESS_KEY = 'ci'; STORAGE_SECRET = 'ci'
             ELECTRONIC_INVOICE_URL = 'http://127.0.0.1:9'
             ELECTRONIC_INVOICE_USER = 'ci'; ELECTRONIC_INVOICE_PASSWORD = 'ci'
