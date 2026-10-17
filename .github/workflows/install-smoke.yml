@@ -46,14 +46,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      # The runner image ships a PostgreSQL service; make sure nothing holds the ports the
-      # appliance binds (5432 Postgres, 8080 edge-node, 3000 Next, 80/443 Caddy).
+      # The runner image ships a PostgreSQL service and IIS (HTTP.sys holds :80 as PID 4,
+      # "System"); stop both so nothing holds the ports the appliance binds (5432 Postgres,
+      # 8080 edge-node, 3000 Next, 80/443 Caddy).
       - name: Free the appliance ports
         run: |
-          Get-Service postgresql* -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue
+          Get-Service postgresql*, W3SVC, WAS -ErrorAction SilentlyContinue |
+            Stop-Service -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
           $busy = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
             Where-Object LocalPort -in 5432, 8080, 3000, 80, 443
-          if ($busy) { $busy | Format-Table LocalAddress, LocalPort, OwningProcess | Out-String | Write-Host; throw 'appliance ports are in use' }
+          if ($busy) {
+            $busy | Format-Table LocalAddress, LocalPort, OwningProcess | Out-String | Write-Host
+            netsh http show servicestate view=requestq | Out-String | Write-Host
+            throw 'appliance ports are in use'
+          }
 
       - name: Stage the install root at C:\laguna-edge
         run: |
