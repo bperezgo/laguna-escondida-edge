@@ -32,8 +32,21 @@ if ($isApp -and -not $FromSource) {
   & $fetch -Only $Service -DownloadOnly
 }
 
-Write-Host "Stopping $Service ..."
-& $exe stop | Out-Host
+# Stopping a service also stops its running dependents (caddy -> next -> edge-node -> postgres),
+# and starting it does not bring them back. Stop them explicitly, dependents first, and
+# restart everything that was running afterwards, in dependency order.
+$startOrder = 'postgres','edge-node','next','caddy'
+$i = [array]::IndexOf($startOrder, $Service)
+$chain = if ($i -ge 0) { @($startOrder[$i..($startOrder.Count - 1)]) } else { @($Service) }
+$wasRunning = @($chain | Where-Object { (Get-Service "laguna-$_" -ErrorAction SilentlyContinue).Status -eq 'Running' })
+[array]::Reverse($chain)
+foreach ($name in $chain) {
+  $svc = Get-Service "laguna-$name" -ErrorAction SilentlyContinue
+  if (-not $svc -or $svc.Status -eq 'Stopped') { continue }
+  Write-Host "Stopping laguna-$name ..."
+  & sc.exe stop "laguna-$name" | Out-Null
+  $svc.WaitForStatus('Stopped', (New-TimeSpan -Seconds 30))
+}
 
 if ($isApp -and $FromSource) {
   Write-Host "Rebuilding $Service from source ..."
@@ -59,6 +72,9 @@ if ($Service -eq 'alloy') {
   if ($LASTEXITCODE -ne 0) { throw "alloy\config.alloy failed validation; not restarting the sidecar." }
 }
 
-Write-Host "Starting $Service ..."
-& $exe start | Out-Host
+foreach ($name in $startOrder + @('alloy')) {
+  if ($name -ne $Service -and $wasRunning -notcontains $name) { continue }
+  Write-Host "Starting laguna-$name ..."
+  Start-Service "laguna-$name"
+}
 Write-Host "Updated $Service."
