@@ -131,12 +131,13 @@ with the pinned release.
    scripts/release.sh --backend v1.2.0 --frontend v1.0.3 --version v1.1.0
    ```
    It refuses a backend newer than the cloud's `image-tags.json` pin and an app tag whose
-   release has no Windows asset (failed CI). Then it pins `versions.json`, commits, tags this
-   repo, and publishes a GitHub Release with `edge-vX.Y.Z.zip` (tracked files only, never
-   `env/` or `certs/`) and a `manifest.json` (every component's tag, URL and sha256).
-4. On each box: `git pull` then `.\scripts\update.ps1 -Service edge-node` (or `next`).
-   `update.ps1` downloads and verifies *before* stopping the service; `GET /api/edge/status`
-   reports the running backend tag in `version`.
+   release has no Windows asset (failed CI). Then it pins `versions.json` (tags + sha256),
+   signs `manifest.json` with your minisign key, tags this repo, and publishes a GitHub Release
+   with `edge-vX.Y.Z.zip` (tracked files only, never `env/` or `certs/`), `manifest.json` and
+   `manifest.json.minisig`. One-time key setup: [`UPDATING.md`](UPDATING.md).
+4. Boxes with `laguna-updater` show the admin banner within 30 min. By hand on a box:
+   `git pull` then `.\scripts\apply-release.ps1` (drain, backup, swap, verify, rollback).
+   `GET /api/edge/status` reports the running backend tag in `version`.
 
 ---
 

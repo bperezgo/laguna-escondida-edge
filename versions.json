@@ -1,10 +1,14 @@
 ﻿{
-    "_comment": "Pinned versions of everything the edge appliance runs. scripts/fetch-artifacts.ps1 and scripts/install.ps1 read this. artifacts.*.version is a GitHub Release TAG of that repo (CI attaches the Windows build + .sha256). The app pins are set by scripts/release.sh (do not edit them by hand); on a box, run scripts/update.ps1 -Service <name> after pulling.",
+    "_comment": "Pinned versions of everything the edge appliance runs. scripts/fetch-artifacts.ps1 and scripts/install.ps1 read this. artifacts.*.version is a GitHub Release TAG of that repo (CI attaches the Windows build + .sha256). The app pins are set by scripts/release.sh (do not edit them by hand); on a box, run scripts/apply-release.ps1 after pulling (docs/UPDATING.md). minisign verifies signed releases for laguna-updater; its zip is pinned by sha256.",
     "winsw": "2.12.0",
     "caddy": "2.8.4",
     "alloy": "1.19.2",
     "node": "20.18.0",
     "postgres": "16.4",
+    "minisign": {
+        "version": "0.12",
+        "sha256": "37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479"
+    },
     "artifacts": {
         "edge-node": {
             "repo": "laguna-escondida-backend",

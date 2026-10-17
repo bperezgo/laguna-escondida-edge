@@ -6,19 +6,22 @@
 #      its Windows asset, or the ones you pass).
 #   2. Refuse unless the cloud already runs that backend (cloud first, then edges):
 #      the backend tag must be <= aws-infra/image-tags.json "laguna".
-#   3. Pin them in versions.json, commit, tag this repo vX.Y.Z, push.
-#   4. Publish a GitHub Release of this repo with:
-#        edge-vX.Y.Z.zip    tracked files at the tag (scripts, Caddyfile, services, alloy, ...);
-#                           never env/, certs/ or data -- those are gitignored, so not in git archive
-#        manifest.json      every component's tag, download URL and sha256 + the infra pins
-#      (+ .sha256 for each). The future laguna-updater reads manifest.json; signing it
-#      (minisign, key kept off CI) lands with that updater.
+#   3. Pin them (tag + sha256) and the appliance version in versions.json, commit, tag vX.Y.Z.
+#   4. Build and sign the release, THEN push, and publish a GitHub Release of this repo with:
+#        edge-vX.Y.Z.zip       tracked files at the tag (scripts, Caddyfile, services, alloy, ...);
+#                              never env/, certs/ or data -- those are gitignored, so not in git archive
+#        manifest.json         every component's tag, download URL and sha256 + the infra pins
+#        manifest.json.minisig signed with your minisign key; laguna-updater refuses anything else
+#      (+ .sha256 for each). If signing fails, the local commit and tag are undone; nothing is pushed.
 #
 # Usage:  scripts/release.sh                                  # latest app releases, bump patch
 #         scripts/release.sh --backend v1.1.18 --frontend v1.0.2 --version v1.1.0
 #         scripts/release.sh --dry-run                        # resolve + check, change nothing
 #
 # Env:    AWS_INFRA_DIR  path to the aws-infra checkout (default: ../aws-infra)
+#         MINISIGN_KEY   secret key (default: ~/.minisign/laguna-edge.key). One-time setup:
+#                        minisign -G -p updater/minisign.pub -s ~/.minisign/laguna-edge.key
+#                        then commit updater/minisign.pub. Keep the secret key off CI.
 set -euo pipefail
 
 OWNER=bperezgo
@@ -29,6 +32,8 @@ FRONTEND_REPO=laguna-escondida-frontend
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 AWS_INFRA_DIR=${AWS_INFRA_DIR:-"$ROOT/../aws-infra"}
 VERSIONS="$ROOT/versions.json"
+MINISIGN_KEY=${MINISIGN_KEY:-"$HOME/.minisign/laguna-edge.key"}
+PUBKEY="$ROOT/updater/minisign.pub"
 
 BACKEND="" FRONTEND="" VERSION="" DRY_RUN=0 YES=0
 while [ $# -gt 0 ]; do
@@ -54,7 +59,7 @@ strip_bom() { LC_ALL=C sed $'1s/^\xef\xbb\xbf//' "$1"; }
 backend_asset()  { echo "edge-node-windows-amd64-$1.zip"; }   # names match the app repos'
 frontend_asset() { echo "next-standalone-windows-$1.zip"; }   # release.yml and fetch-artifacts.ps1
 
-for t in git gh jq; do command -v "$t" >/dev/null || die "$t is not installed"; done
+for t in git gh jq minisign; do command -v "$t" >/dev/null || die "$t is not installed"; done
 cd "$ROOT"
 
 # true if release $2 of repo $1 has both $3 and $3.sha256
@@ -89,6 +94,9 @@ step "Preflight"
 git fetch -q origin --tags
 [ "$(git rev-list --count main..origin/main)" = 0 ] || die "main is behind origin/main; pull first"
 git diff --quiet HEAD -- versions.json || die "versions.json has uncommitted changes"
+[ -f "$MINISIGN_KEY" ] || die "no signing key at $MINISIGN_KEY (see --help for the one-time setup)"
+git ls-files --error-unmatch updater/minisign.pub >/dev/null 2>&1 \
+  || die "updater/minisign.pub is not committed; boxes could not verify this release"
 UNPUSHED=$(git log --oneline origin/main..main)
 echo "  ok"
 
@@ -156,26 +164,31 @@ if [ "$YES" != 1 ]; then
   case "$ok" in y|Y|yes) ;; *) echo "aborted."; exit 1 ;; esac
 fi
 
-# --- 4. pin, commit, tag, push -----------------------------------------------------
+# --- 4. pin, commit, tag (local) ---------------------------------------------------
 step "Pin versions.json"
-# Keep the BOM and 4-space layout PowerShell wrote, so the diff is just the two pins.
+# Keep the BOM and 4-space layout PowerShell wrote. The sha256 pins let a box install a release
+# the updater already downloaded without asking GitHub again.
 tmp=$(mktemp)
 strip_bom "$VERSIONS" \
-  | jq --indent 4 --arg b "$BACKEND" --arg f "$FRONTEND" \
-       '.artifacts["edge-node"].version = $b | .artifacts.next.version = $f' > "$tmp"
+  | jq --indent 4 --arg v "$VERSION" --arg b "$BACKEND" --arg bs "$BACKEND_SHA" \
+       --arg f "$FRONTEND" --arg fs "$FRONTEND_SHA" \
+       '. as $o | {_comment: $o._comment, appliance_version: $v} + ($o | del(._comment, .appliance_version))
+        | .artifacts["edge-node"].version = $b | .artifacts["edge-node"].sha256 = $bs
+        | .artifacts.next.version = $f | .artifacts.next.sha256 = $fs' > "$tmp"
 { printf '\xef\xbb\xbf'; cat "$tmp"; } > "$VERSIONS"; rm -f "$tmp"
-if git diff --quiet -- versions.json; then
-  echo "  pins unchanged"
-else
-  git commit -q -m "release: $VERSION (edge-node $BACKEND, next $FRONTEND)" -- versions.json
-  echo "  committed $(git rev-parse --short HEAD)"
-fi
+git commit -q -m "release: $VERSION (edge-node $BACKEND, next $FRONTEND)" -- versions.json
+echo "  committed $(git rev-parse --short HEAD)"
 git tag -a "$VERSION" -m "edge appliance $VERSION: edge-node $BACKEND, next $FRONTEND"
-git push -q origin main "refs/tags/$VERSION"
-echo "  pushed main + $VERSION"
 
-# --- 5. build + publish the release ------------------------------------------------
-step "Publish GitHub Release $VERSION"
+# Until the push below, a failure leaves nothing behind: drop the tag and the release commit.
+undo_local() {
+  git tag -d "$VERSION" >/dev/null
+  git reset -q --keep HEAD~1
+  die "$1 (the local release commit and tag were undone; nothing was pushed)"
+}
+
+# --- 5. build + sign ---------------------------------------------------------------
+step "Build + sign $VERSION"
 OUT=$(mktemp -d)
 EDGE_ZIP="edge-$VERSION.zip"
 git archive --format=zip -o "$OUT/$EDGE_ZIP" "$VERSION"
@@ -201,6 +214,18 @@ strip_bom "$VERSIONS" | jq --indent 2 \
    }' > "$OUT/manifest.json"
 (cd "$OUT" && shasum -a 256 "$EDGE_ZIP" > "$EDGE_ZIP.sha256" && shasum -a 256 manifest.json > manifest.json.sha256)
 
+echo "  signing manifest.json with $MINISIGN_KEY"
+minisign -S -s "$MINISIGN_KEY" -m "$OUT/manifest.json" -t "laguna-edge $VERSION" \
+  || undo_local "signing failed"
+minisign -V -q -p "$PUBKEY" -m "$OUT/manifest.json" \
+  || undo_local "the signature does not verify with updater/minisign.pub (wrong key?)"
+echo "  signature ok"
+
+# --- 6. push + publish -------------------------------------------------------------
+step "Publish GitHub Release $VERSION"
+git push -q origin main "refs/tags/$VERSION"
+echo "  pushed main + $VERSION"
+
 NOTES="Edge appliance $VERSION
 
 | component | version |
@@ -210,10 +235,12 @@ NOTES="Edge appliance $VERSION
 | cloud at release time | $CLOUD |"
 if ! gh release create "$VERSION" -R "$OWNER/$EDGE_REPO" --verify-tag --title "$VERSION" \
        --notes "$NOTES" --generate-notes \
-       "$OUT/$EDGE_ZIP" "$OUT/$EDGE_ZIP.sha256" "$OUT/manifest.json" "$OUT/manifest.json.sha256"; then
+       "$OUT/$EDGE_ZIP" "$OUT/$EDGE_ZIP.sha256" "$OUT/manifest.json" "$OUT/manifest.json.sha256" \
+       "$OUT/manifest.json.minisig"; then
   die "tag $VERSION is pushed but the release failed. Assets are in $OUT; retry with:
   gh release create $VERSION -R $OWNER/$EDGE_REPO --verify-tag --title $VERSION --generate-notes $OUT/*"
 fi
 rm -rf "$OUT"
 printf '\n\033[32mReleased %s\033[0m  https://github.com/%s/%s/releases/tag/%s\n' "$VERSION" "$OWNER" "$EDGE_REPO" "$VERSION"
-echo "On each box (until laguna-updater exists): git pull, then scripts\\update.ps1 -Service edge-node / next."
+echo "Boxes with laguna-updater offer it in the admin banner within 30 min."
+echo "By hand on a box: git pull, then scripts\\apply-release.ps1"

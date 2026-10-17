@@ -2,7 +2,7 @@
   fetch-artifacts.ps1 -- download the pinned binaries/bundles into artifacts\.
   Reads versions.json.
 
-  INFRASTRUCTURE (Caddy, Alloy, Node, Postgres) are public upstream downloads.
+  INFRASTRUCTURE (Caddy, Alloy, Node, Postgres, minisign) are public upstream downloads.
   APP artifacts (edge-node, next) are the Windows builds CI attaches to each app repo's
   GitHub Release (see .github/workflows/release.yml in -backend / -frontend). versions.json
   pins each to a release TAG; the download is checked against the release's .sha256 and
@@ -19,8 +19,8 @@
 [CmdletBinding()]
 param(
   # Which artifacts to fetch. Default: all of them.
-  [ValidateSet('caddy','alloy','node','postgres','edge-node','next')]
-  [string[]] $Only = @('caddy','alloy','node','postgres','edge-node','next'),
+  [ValidateSet('caddy','alloy','node','postgres','minisign','edge-node','next')]
+  [string[]] $Only = @('caddy','alloy','node','postgres','minisign','edge-node','next'),
   [switch]   $Force,        # re-download/re-install even if the target already exists
   # App artifacts only: download + verify into the local cache, do not touch artifacts\.
   # update.ps1 uses this BEFORE stopping a service, so the download is not downtime.
@@ -119,6 +119,30 @@ if (Want 'postgres') {
   }
 }
 
+# --- minisign (laguna-updater verifies release signatures with it) -----------------
+if (Want 'minisign') {
+  $ms = $v.minisign
+  Step "minisign $($ms.version)"
+  $dest = Join-Path $Artifacts 'minisign'
+  if ((Test-Path (Join-Path $dest 'minisign.exe')) -and -not $Force) {
+    Write-Host "  present -- skip."
+  } else {
+    # The updater trusts this binary to check signatures, so pin the zip itself by sha256.
+    $zip = Join-Path $tmp 'minisign.zip'
+    $url = "https://github.com/jedisct1/minisign/releases/download/$($ms.version)/minisign-$($ms.version)-win64.zip"
+    Write-Host "  downloading $url"
+    Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+    $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+    if ($got -ne $ms.sha256) { throw "CHECKSUM MISMATCH for minisign (expected $($ms.sha256), got $got)." }
+    $ex = Join-Path $tmp 'minisign'
+    if (Test-Path $ex) { Remove-Item $ex -Recurse -Force }
+    Expand-Archive -Path $zip -DestinationPath $ex -Force
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    Copy-Item (Join-Path $ex 'minisign-win64\x86_64\minisign.exe') (Join-Path $dest 'minisign.exe') -Force
+    Write-Host "  -> $dest\minisign.exe" -ForegroundColor Green
+  }
+}
+
 # --- App artifacts (edge-node, next) from GitHub Releases --------------------------
 # Asset names match the app repos' release workflows.
 $AppAssets = @{
@@ -142,8 +166,13 @@ function Get-VerifiedRelease($app) {
   $sumF  = "$zip.sha256"
 
   Write-Host "  $($pin.repo) $tag"
-  Invoke-WebRequest -Uri "$base/$asset.sha256" -OutFile $sumF -UseBasicParsing
-  $expected = ((Get-Content $sumF -Raw).Trim() -split '\s+')[0].ToLower()
+  # release.sh pins the sha256 too, so a zip the updater already staged installs offline.
+  if ($pin.sha256) {
+    $expected = "$($pin.sha256)".ToLower()
+  } else {
+    Invoke-WebRequest -Uri "$base/$asset.sha256" -OutFile $sumF -UseBasicParsing
+    $expected = ((Get-Content $sumF -Raw).Trim() -split '\s+')[0].ToLower()
+  }
   if ($expected -notmatch '^[0-9a-f]{64}$') { throw "$asset.sha256 is not a sha256 checksum." }
 
   if (-not (Test-Path $zip) -or ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() -ne $expected)) {

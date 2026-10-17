@@ -1,0 +1,20 @@
+<service>
+  <id>laguna-updater</id>
+  <name>Laguna Escondida - Updater</name>
+  <description>Checks for signed edge appliance releases, downloads and verifies them, and applies one only when an admin requests it from the app. Outbound HTTPS only; listens on nothing.</description>
+
+  <executable>%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe</executable>
+  <arguments>-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%BASE%\..\updater\laguna-updater.ps1"</arguments>
+  <workingdirectory>%BASE%\..</workingdirectory>
+
+  <!-- No <depend>, and nothing depends on it: it stops and starts the app services itself. -->
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="60 sec"/>
+  <stoptimeout>30 sec</stoptimeout>
+
+  <logpath>%BASE%\..\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>2048</sizeThreshold>
+    <keepFiles>4</keepFiles>
+  </log>
+</service>

@@ -7,13 +7,15 @@
       .\scripts\install.ps1
       .\scripts\install.ps1 -AllowedTabletIPs '192.168.10.21','192.168.10.22'
 
-  Re-runnable: it refreshes each service and the firewall rule.
+  Re-runnable: it refreshes each service and the firewall rule. An installed laguna-updater
+  is left alone (it may be the one running this script); -ReinstallUpdater refreshes it.
   Pre-req: run scripts\fetch-artifacts.ps1 first so artifacts\ is populated.
 #>
 [CmdletBinding()]
 param(
   # IPs / CIDRs allowed on :443 and :80. Defaults to LAGUNA_LAN_CIDR from env\box.env.
-  [string[]] $AllowedTabletIPs
+  [string[]] $AllowedTabletIPs,
+  [switch]   $ReinstallUpdater
 )
 
 $ErrorActionPreference = 'Stop'
@@ -186,11 +188,26 @@ if (-not $InstallAlloy) {
   Write-Host "Telemetry sidecar config OK -> $($alloyCfg['LAGUNA_TELEMETRY_INGEST_URL']) (node $($alloyCfg['LAGUNA_NODE_ID']))"
 }
 
+# --- 1e. Updater (only once the release signing key is committed) -------------------
+$PubKey = Join-Path $Root 'updater\minisign.pub'
+$UpdaterExists = [bool](Get-CimInstance Win32_Service -Filter "Name='laguna-updater'" -ErrorAction SilentlyContinue)
+$InstallUpdater = (Test-Path $PubKey) -and ($ReinstallUpdater -or -not $UpdaterExists)
+if (-not (Test-Path $PubKey)) {
+  Write-Host "No updater\minisign.pub -- skipping laguna-updater (see docs\UPDATING.md)."
+} elseif (-not $InstallUpdater) {
+  Write-Host "laguna-updater is already installed; leaving it running (-ReinstallUpdater to refresh it)."
+} else {
+  $MinisignExe = Join-Path $Root 'artifacts\minisign\minisign.exe'
+  if (-not (Test-Path $MinisignExe)) { throw "Missing $MinisignExe. Run scripts\fetch-artifacts.ps1 -Only minisign first." }
+  New-Item -ItemType Directory -Force -Path (Join-Path $Root 'state') | Out-Null
+}
+
 # --- 2. Install services in dependency order --------------------------------------
 # WinSW finds <name>.xml by matching the copied exe's basename.
 $order = 'postgres','edge-node','next','caddy'
 # Alloy first so OTLP is listening when edge-node starts exporting.
 if ($InstallAlloy) { $order = @('alloy') + $order }
+if ($InstallUpdater) { $order += 'updater' }
 
 # On a re-run, stop everything first, dependents before what they depend on: SCM refuses to
 # stop laguna-postgres while laguna-edge-node is running, which left postgres.exe locked.
