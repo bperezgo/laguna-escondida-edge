@@ -494,9 +494,16 @@ server component or a small `/api/config` route. Rule going forward: **no per-bo
 - **Phase 1** — unchanged, plus the `NEXT_PUBLIC_*` → runtime move above. New `release.yml` jobs:
   backend adds a `windows` job next to `push-image`; frontend gets its first workflow.
 - **Phase 2** — unchanged (the safety sequence, proven by hand twice).
+  *Built 2026-10-17:* `scripts/apply-release.ps1` (drain, `pg_dump`, swap, verify, paired
+  rollback; `-RollbackDrill`), `docs/MIGRATION_RECOVERY.md`. Proven in CI; not yet on the box.
 - **Phase 3** — updater stages + waits for consent (flow above) instead of a maintenance window;
   admin-only banner in the frontend; `GET/POST /api/edge/update` on edge-node that only reads the
   state files / writes the request flag.
+  *Built 2026-10-17:* `updater/laguna-updater.ps1` + `services/updater.xml`, minisign signing in
+  `release.sh`, contract in `docs/UPDATE_PROTOCOL.md`, backend PR #25 (`edge:update`), frontend
+  PR #1 (banner). The updater does not update itself: a technician runs
+  `install.ps1 -ReinstallUpdater` when `updater/` changes. Releases that change infra pins are
+  not offered by the updater.
 - **Phase 4** — dropped for now.
 
 ### Phase 1 status (2026-10-16)

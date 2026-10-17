@@ -1,6 +1,10 @@
 # Plan — Restaurant Network Architecture (Edge Appliance Deployment)
 
-> Status: **design — pending hardware purchase.** Companion docs:
+> Status: **design — hardware purchase in progress (retake 2026-07).** The app appliance is
+> **deployed and running** on a *v1* network (old TL-WR850N, flat LAN, **IP-based** serving —
+> the box IP is hardcoded on every phone). This doc is the network level-up; the current-state
+> map, the decisions locked this retake, and the step-by-step execution sequence are in **§14**.
+> Companion docs:
 > `ai-plan/EDGE_LAN_SERVING_PLAN.md` (Caddy / TLS / cookie / access-control design — still
 > valid; this doc resolves its §11 open questions),
 > `ai-plan/EDGE_WINDOWS_SERVICES_PLAN.md` (how the box runs the services).
@@ -315,19 +319,224 @@ Keep this table (plus the box boot-order and the cert-reinstall steps) printed n
 
 ## 13. Inputs still needed
 
-1. **Floor size / layout** → decides UDR (all-in-one) vs UCG-Ultra + separate AP(s), and how many
-   APs. Rough sq-meters + whether the kitchen is walled off is enough.
+1. ~~**Floor size / layout** → decides UDR (all-in-one) vs UCG-Ultra + separate AP(s), and how many
+   APs.~~ **Resolved (retake §14.3):** *medium floor, some walls* → **modular UCG-Ultra + 2–3 APs**
+   (all-in-one UDR is out — customers need more APs). Confirm the 3rd AP once the kitchen wall/coverage
+   is measured on site.
 2. **Non-tablet devices on the POS side?** A manager laptop, a printer admin page, a backup KDS —
    anything that must reach `192.168.10.10` needs an explicit Staff→POS allow rule (§5) and a
    firewall-allowlist entry. List them now to avoid a confusing "it's blocked" later.
    *(The primary **wired KDS** lives directly **on** the POS VLAN — §2/§6b — so it needs only a DHCP
    reservation, **no** inter-VLAN rule.)*
 3. **Invoicing latency tolerance** → whether to budget for LTE WAN failover (§8).
-4. **ISP setup**: standalone modem/ONT, or an ISP router you can't remove? If the latter, we run
-   the UniFi gateway behind it (double-NAT is fine for outbound-only) or put the ISP box in
-   bridge mode.
+4. ~~**ISP setup**: standalone modem/ONT, or an ISP router you can't remove?~~ **Resolved
+   (retake §14.3):** *ISP router that can't be removed* → run the **UCG-Ultra behind it** (WAN →
+   ISP LAN; double-NAT is fine, outbound-only per §8). Two must-dos: keep UniFi LANs off the ISP
+   subnet (no overlap with `192.168.0/1`), and **disable the ISP router's Wi-Fi** so all devices
+   live on UniFi and it adds no co-channel interference. Optional: ask ISP for bridge mode.
 
 > Resolved: the **printer is USB-attached to the box** (`PRINTER_TRANSPORT=windows`), so it's not
 > a network device — removed from the topology, VLAN, firewall, and reservations above.
+
+---
+
+## 14. Retake — current state, decisions, and execution sequence (2026-07)
+
+### 14.1 Where we actually are
+
+- **Appliance: done & running well.** The four Windows services (Postgres → edge-node → next →
+  caddy), cloud sync, printing, internal-CA HTTPS are all deployed and verified
+  (`EDGE_WINDOWS_SERVICES_PLAN.md`). Nothing to retake there.
+- **Network: still v1.** Old **TL-WR850N**, flat LAN, **one AP**, kitchen on a (wireless) tablet.
+  Crucially the live `Caddyfile` serves on the **box IP** (`{$LAGUNA_LAN_IP}`), *not* on
+  `pos.laguna.lan` — so every phone hardcodes the IP, and a router reboot that reassigns the box
+  a new IP is exactly the pain to kill. Live subnet is **`192.168.101.0/24`** (`env/box.env`),
+  not the plan's `192.168.10.0/24` — reconcile at cutover (§14.7).
+
+### 14.2 The three level-up goals → where the plan already solves them
+
+| Goal (owner's words) | Solved by | The real fix |
+|---|---|---|
+| "Static IP so the box IP stops changing; stop depending on someone who understands why" | §3 + §4 | **DHCP reservation** (box always same IP) **+ local DNS** `pos.laguna.lan → box`. Phones use the *name* → the URL never changes again → nothing left to "understand." |
+| "Monitor internet, give customers bandwidth without hurting operations, more APs" | §6 + §6b | UniFi Guest network with **per-client + total bandwidth caps**, traffic/DPI **monitoring**, client isolation; **more APs + POS on 5 GHz + airtime fairness** — the actual airtime fix. |
+| "Dedicated tappable kitchen screen, wired ethernet" | §2 + §6b | **Wired KDS on the POS VLAN** — immune to Wi-Fi airtime contention. Screen = thin client (browser → `pos.laguna.lan`, root CA, kiosk). |
+
+> Note on "static IP": the owner means a **stable LAN IP for the box**, not an ISP static WAN IP.
+> Reservation + hostname together make the IP irrelevant — see §14.2 table row 1.
+
+### 14.3 Decisions locked this retake
+
+- **Buy path → modular UniFi.** Customers need multiple APs, so the all-in-one UDR is out.
+  BOM in §14.6.
+- **ISP → router that can't be removed** → run the **UCG-Ultra behind it** (WAN → ISP LAN).
+  Double-NAT is fine (outbound-only, §8). Keep UniFi LANs off the ISP subnet; **disable the ISP
+  router's Wi-Fi**; optionally ask ISP for bridge mode. (Also §13.4.)
+- **Coverage → medium, some walls → 2–3 APs** (dining + kitchen/staff; 3rd if the kitchen is
+  walled — rate-vs-range, §6b). (Also §13.1.)
+- **Kitchen display → decided: Raspberry Pi 5 + 15.6" touchscreen** (§14.5.1). The KDS is only a
+  browser thin client; commercial Android panels are more durable but **import-only/expensive in
+  Colombia**, so the DIY Pi build wins on cost + sourcing while meeting every hard requirement.
+
+### 14.4 Free win to do *now* (before any purchase)
+
+On the current **TL-WR850N**, set a **DHCP address reservation** for the box's MAC. The IP stops
+moving on reboot → you stop editing phones. It's a mitigation (still IP-based, no hostname), but
+zero-cost and buys calm time to stage the real gear. The live `Caddyfile` comment already
+recommends exactly this.
+
+### 14.5 Kitchen display (KDS) hardware — comparison
+
+Requirements (all three meet them): wired **ethernet**, a **touchscreen** ≥15" so cooks read it
+across the line, runs a modern **browser**, can install a **user root CA**, can **kiosk-lock**.
+It lives on the **POS VLAN** with a `.15` DHCP reservation (§3) — no inter-VLAN rule needed.
+
+| Option | Approx (USD) | Cabling | Install effort | Kitchen fit |
+|---|---|---|---|---|
+| **Commercial Android PoE panel** (~15.6") | ~$200–400 | **1 cable** — PoE = power + data from the UniFi switch | Android: install CA + a kiosk app | **Best** — sealed unit, single cable near heat/water, wall/arm mount |
+| **Mini-PC + touch monitor** (Win/Linux) | ~$300–550 | 2 (ethernet + power) | **Easiest** — same OS world as the box; Chrome/Edge kiosk; CA in 2 clicks | Good, but two pieces + a power brick to place |
+| **Raspberry Pi 5 + 15.6" touchscreen** ⭐ *(chosen — §14.5.1)* | ~$230–290 | 2 (ethernet + power) | DIY — Chromium kiosk image; active cooler; SD-card care | Cheapest **at ≥15"**; least rugged (bare panel, not sealed) — mount at the pass |
+
+**Decision (retake): Raspberry Pi 5 + 15.6" touchscreen.** The commercial Android PoE panel is the
+most *durable* option, but it's **expensive and hard to source in Colombia** (ProDVX/Mimo/Elo-class
+units are effectively import-only) — which is what stalled the search. Since the KDS is only a
+**browser thin client**, the DIY Pi build meets every hard requirement (wired ethernet, ≥15",
+browser, user CA, kiosk) at roughly half the landed cost. Full spec in §14.5.1.
+
+> Two traps found during the search, worth recording: **consumer Android tablets** are **Wi-Fi
+> only (no RJ45)**, so they fail the wired-KDS rule (§6b); and **purpose-built "KDS appliances"**
+> are often **locked to a vendor's kitchen cloud**, which blocks a plain browser + your own root
+> CA. Both look tempting on Mercado Libre and both are dead ends for this design.
+
+#### 14.5.1 Chosen build — Raspberry Pi 5 + 15.6" touchscreen
+
+**Compute — Raspberry Pi 5 (4 GB).** Sweet spot for a single Chromium kiosk tab with live SSE
+updates (2 GB has no headroom; 8/16 GB is wasted). ~2–3× faster browser than a Pi 4 — noticeable
+under live order updates. **Built-in Gigabit Ethernet** satisfies the wired-KDS rule (§6b) with no
+adapter, and it's **USB-C DC-powered**, so the KDS is **independent of the PoE-switch decision**
+(§14.6 AP-power note). Use the **official 27 W USB-C PSU** (5 V/5 A) — a generic charger
+under-powers it. *Budget alt:* Pi 4 (4 GB) — cheaper and cooler, but less snappy.
+
+**Screen — 15.6" HDMI + USB-touch (the Waveshare line is the safe, driver-free pick):**
+
+| Screen | Notes | Approx (USD) |
+|---|---|---|
+| **Waveshare 15.6" HDMI Capacitive "H" — case + toughened glass** ⭐ | IPS 1920×1080, 10-pt touch; glass survives splash/knocks; taps through thin gloves | ~$120–160 |
+| Waveshare 15.6" QLED | brighter panel for a bright kitchen | ~$150–190 |
+| Generic 15.6" portable touch monitor (HDMI + USB-C) | cheapest, bare panel/no glass — verify Linux HID multi-touch first | ~$90–130 |
+
+Power the panel from **its own USB/DC supply**, not the Pi's USB, so it can't brown-out the Pi.
+
+**Cooling — active cooler required; no "refrigeration."** The Pi 5 needs the **official Active
+Cooler** (~$5, heatsink + blower fan): the fan idles until ~50 °C, ramps to ~75 °C, throttles at
+~80–85 °C, and holds the SoC 20–25 °C below throttle at 22 °C ambient. A KDS browser is a **light,
+bursty load**, so even at 30–35 °C kitchen ambient there's comfortable margin. What's actually
+needed: **① active cooler · ② a *vented* (not sealed) enclosure · ③ mount at the *pass*, away from
+grill/fryer/steam.** The LCD itself is rated ~0–50 °C, so placement protects the panel more than the
+Pi. A cooled/AC enclosure is overkill. *Exception:* if the only viable mount is genuinely hot
+(>40–45 °C, right over the line), neither a bare LCD nor a Pi is ideal — that's the lone case where a
+sealed industrial panel would win.
+
+**BOM & total (~$230–290):**
+
+| Part | Approx (USD) |
+|---|---|
+| Raspberry Pi 5 (4 GB) | ~$60 |
+| Official 27 W USB-C PSU | ~$12 |
+| Official Active Cooler | ~$5 |
+| Vented VESA case/enclosure | ~$15–25 |
+| microSD A2 64 GB *(or USB SSD ~$25)* | ~$10 |
+| Waveshare 15.6" touch (glass + case) | ~$120–160 |
+| HDMI + USB cables | ~$10–15 |
+
+**The DIY cost is setup, not money — three steps:**
+1. **Kiosk image:** Raspberry Pi OS + Chromium `--kiosk` autostart; screen-blanking off; cursor hidden.
+2. **Root CA (the non-obvious bit):** Chromium on Linux uses its **own NSS store**, so trust the
+   Caddy internal-CA root in **both** places — system (`update-ca-certificates`) *and* Chromium's
+   NSS DB (`certutil -d sql:~/.pki/nssdb -A …`). Budget ~20 min the first time.
+3. **SD-card survival (pairs with the UPS §9):** boot from a **USB SSD** or use an
+   **overlay/read-only root FS** so a power cut can't corrupt the card — this closes the "SD-card
+   care" caveat.
+
+Like every KDS, it lives on the **POS VLAN** with a `.15` DHCP reservation (§3) and points at
+`https://pos.laguna.lan` (root CA installed, kiosk-locked).
+
+### 14.6 Bill of materials (retake)
+
+| Item | Role | Approx (USD) |
+|---|---|---|
+| UniFi Cloud Gateway Ultra (UCG-Ultra) | gateway + controller: local DNS, VLANs, guest caps, monitoring | ~$129 |
+| UniFi PoE switch (USW-Lite-8-PoE) — *conditional; see AP-power note* | extra ports + **PoE for the APs**; wires box + wired KDS | ~$109 |
+| 2–3× UniFi AP (U6+ ~$129 / U7 ~$189) | dining + kitchen/staff coverage | ~$260–570 |
+| Line-interactive UPS (600–900 VA) | box + gateway + switch ride brownouts; graceful PG shutdown (§9) | ~$90–150 |
+| Kitchen display — **Raspberry Pi 5 + 15.6" touch** (§14.5.1) | wired KDS thin client | ~$230–290 |
+
+Verify current SKUs/prices before buying. The UPS (§9) is **not optional** — abrupt power loss
+corrupts Postgres.
+
+**UCG-Ultra — features confirmed (2026-07, against `store.ui.com/us/en/products/ucg-ultra` +
+`techspecs.ui.com`).** The UCG-Ultra is a full UniFi Network *console* (runs the controller
+itself — no separate controller box), so everything this plan needs is supported: **local DNS
+records** (§4), **VLAN/subnet segmentation** (§3), **Layer-7 inter-VLAN firewall** (§5), **guest
+network + Advanced-QoS bandwidth caps + client isolation** (§6b), **DPI traffic monitoring**
+(§14.2), **multi-WAN + LTE/5G failover** (§8), **Teleport/WireGuard VPN** for remote admin
+(§8, no port-forwarding), and a **customizable DHCP server** for the reservations (§3). Rated
+~30 UniFi devices / ~300 clients, 1 Gbps IPS routing — ample for one shop. **This is the right
+device.** Same SKU as the Mercado Libre listing (5 ports = 1× 2.5G WAN + 4× 1G LAN).
+
+**AP-power note — do we actually need the PoE switch?** The UCG-Ultra has **no PoE output** (the
+store page's "PoE-powered" means the gateway *itself* can be powered by a PoE adapter — it does
+**not** feed PoE to APs). And UniFi APs (U6+/U7) are **PoE-only** — no DC barrel jack — so the
+APs are the one class of device that can't use its own power brick. The switch's real job is
+therefore (a) **PoE for the APs** and (b) turning the gateway's 1 free LAN port into 8. Decide by
+AP count + KDS choice:
+
+- **Lean path (switch optional):** exactly **2 APs** *and* a **self-powered mini-PC KDS** (§14.5)
+  → box + KDS + 2 AP uplinks = **4 devices = the gateway's 4 LAN ports** (zero spare). Power the
+  two APs with **one PoE injector each** (~$15–25). Saves ~$60–80.
+- **Keep the USW-Lite-8-PoE (~$109):** any of — **3 APs**, the **PoE Android KDS panel** (§14.5,
+  needs PoE), or wanting **spare ports/headroom**. 3 APs + box + KDS = 5 wired devices already
+  exceeds the 4 LAN ports, so the switch is mandatory then, not optional.
+- **Do not substitute** a plain/unmanaged switch or a second router: VLAN segmentation (§3/§5)
+  needs a **VLAN-aware (managed)** switch (UniFi keeps it in one GUI — §0), and a router would add
+  a needless double-NAT/routing layer and break the tagged VLAN trunk to the APs.
+
+> Watch the PoE budget if you keep the switch: the USW-Lite-8-PoE offers ~52 W total. 2–3 APs
+> (~5–13 W each) plus a ~15.6" PoE KDS panel can get close — verify total draw against the budget
+> when picking SKUs.
+
+### 14.7 Rollout sequence (no big-bang; the restaurant keeps running)
+
+0. **Free / today:** DHCP-reserve the box on the TL-WR850N (§14.4).
+1. **Core swap:** install UCG-Ultra behind the ISP router + PoE switch. Create VLANs 10/20/30
+   (§3). Reserve the box IP and add local DNS `pos.laguna.lan → box` (§4). **Wire the box** to the
+   switch on the POS VLAN. Edit the box (§14.8). Re-point phones + kitchen to
+   `https://pos.laguna.lan` **once** → never touch an IP again.
+2. **Kitchen:** install the wired KDS on the POS VLAN (`.15`); root CA + kiosk-lock (§14.5).
+3. **Customers:** add the 2nd/3rd AP; Guest SSID with **per-client + total bandwidth caps** +
+   client isolation; POS on **5 GHz** + airtime fairness; apply inter-VLAN firewall (§5/§6/§6b);
+   turn on traffic monitoring.
+4. **Resilience:** put box + gateway + switch (+ kitchen AP) on the UPS; configure graceful
+   shutdown on low battery (§9).
+
+### 14.8 The box config change at cutover (don't forget)
+
+The subnet moves from the live `192.168.101.0/24` to the chosen POS subnet (recommend the plan's
+`192.168.10.0/24`, box `.10`). On the box:
+
+1. Edit **`env/box.env`** — set the three network values for this box:
+   `LAGUNA_LAN_IP` (→ `192.168.10.10`), `LAGUNA_LAN_CIDR` (→ `192.168.10.0/24`), and
+   `LAGUNA_LAN_HOST` (→ `pos.laguna.lan`). These feed the Windows Firewall rule, the Caddyfile
+   `@notlan` guard, and the composed site address respectively; an IP/CIDR mismatch looks like
+   "the box is blocking everyone."
+2. **Re-run `scripts/install.ps1` — no Caddyfile edit needed** (the hostname is env-driven now).
+   install.ps1 composes `LAGUNA_SITE_ADDR = "pos.laguna.lan, 192.168.10.10"` from `box.env` and
+   exports it; the Caddyfile's `{$LAGUNA_SITE_ADDR}` site address then serves the **name and the
+   IP** (both in the cert SAN), so phones cut over to the name while the raw IP keeps working.
+   Leave `LAGUNA_LAN_HOST` blank for an IP-only box — the site address collapses to just the IP,
+   with no Caddyfile change. (This env-drives the hostname so a new install/tenant only touches
+   `box.env`.)
+3. Re-export the Caddy root CA only if the site set changed the cert — the internal CA root in
+   `C:\laguna-edge\caddy-data` is unchanged, so **existing tablets keep trusting it** (don't wipe
+   that dir).
 ```
 

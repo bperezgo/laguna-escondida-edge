@@ -3,7 +3,8 @@ name: Install smoke test (Windows)
 # Full appliance lifecycle on a clean Windows machine, so a change to the scripts, service
 # definitions, Caddyfile or pinned versions is proven without a physical box:
 #   fetch (verified releases) -> init Postgres -> install -> verify -> re-install (idempotent)
-#   -> update next + edge-node -> verify -> uninstall
+#   -> update next + edge-node -> verify -> apply-release (no-op, rollback drill)
+#   -> laguna-updater (signed release staged, applied on request) -> uninstall
 #
 # What it does NOT cover: a real LAN/tablet, local DNS, the printer, the cloud sync peer, and
 # Windows 10/11 specifics (runners are Windows Server). edge-node points at an unreachable
@@ -76,8 +77,15 @@ jobs:
         run: |
           $f = Join-Path $env:LAGUNA_ROOT 'versions.json'
           $v = Get-Content $f -Raw | ConvertFrom-Json
-          if ($env:EDGE_NODE_TAG) { $v.artifacts.'edge-node'.version = $env:EDGE_NODE_TAG }
-          if ($env:NEXT_TAG)      { $v.artifacts.next.version        = $env:NEXT_TAG }
+          # A pinned sha256 belongs to the pinned tag, so drop it with an override.
+          if ($env:EDGE_NODE_TAG) {
+            $v.artifacts.'edge-node'.version = $env:EDGE_NODE_TAG
+            $v.artifacts.'edge-node'.PSObject.Properties.Remove('sha256')
+          }
+          if ($env:NEXT_TAG) {
+            $v.artifacts.next.version = $env:NEXT_TAG
+            $v.artifacts.next.PSObject.Properties.Remove('sha256')
+          }
           $v | ConvertTo-Json -Depth 10 | Set-Content $f -Encoding utf8
           "edge-node = $($v.artifacts.'edge-node'.version)   next = $($v.artifacts.next.version)"
 
@@ -129,7 +137,16 @@ jobs:
           "box: $ip (pos.laguna.lan)"
 
       - name: Fetch artifacts (infra + verified app releases)
-        run: '& "$env:LAGUNA_ROOT\scripts\fetch-artifacts.ps1" -Only caddy,node,postgres,edge-node,next'
+        run: '& "$env:LAGUNA_ROOT\scripts\fetch-artifacts.ps1" -Only caddy,node,postgres,minisign,edge-node,next'
+
+      # A throwaway key so install.ps1 registers laguna-updater and the updater test can sign
+      # a release. The real signing key never touches CI.
+      - name: Throwaway release signing key
+        run: |
+          New-Item -ItemType Directory -Force -Path C:\updater-test | Out-Null
+          & "$env:LAGUNA_ROOT\artifacts\minisign\minisign.exe" -G -W -f `
+            -p "$env:LAGUNA_ROOT\updater\minisign.pub" -s C:\updater-test\test.key
+          if ($LASTEXITCODE -ne 0) { throw "minisign -G exited $LASTEXITCODE" }
 
       - name: Initialize Postgres
         run: '& "$env:LAGUNA_ROOT\scripts\init-postgres.ps1" -DbPassword $env:DB_PASSWORD'
@@ -150,6 +167,24 @@ jobs:
           & "$env:LAGUNA_ROOT\scripts\update.ps1" -Service next
           & "$env:LAGUNA_ROOT\scripts\update.ps1" -Service edge-node
           & "$env:LAGUNA_ROOT\scripts\verify-install.ps1"
+
+      # Same versions, so the drill exercises drain, pg_dump, swap, verify and the paired
+      # restore (database + binaries) without needing two releases.
+      - name: apply-release (nothing to do, then a rollback drill)
+        run: |
+          $root = $env:LAGUNA_ROOT
+          & "$root\scripts\apply-release.ps1"
+          if ($LASTEXITCODE -ne 0) { throw "no-op apply-release exited $LASTEXITCODE" }
+          & "$root\scripts\apply-release.ps1" -RollbackDrill
+          if ($LASTEXITCODE -ne 0) { throw "rollback drill exited $LASTEXITCODE" }
+          $r = Get-Content "$root\state\update-result.json" -Raw | ConvertFrom-Json
+          if ($r.outcome -ne 'drill_rolled_back') { throw "outcome '$($r.outcome)': $($r.message)" }
+          if (-not (Test-Path "$($r.backup)\db.dump")) { throw 'no db.dump in the backup' }
+          & "$root\scripts\verify-install.ps1"
+          if ($LASTEXITCODE -ne 0) { throw 'verify-install failed after the drill' }
+
+      - name: laguna-updater (signed release, staged, applied on request)
+        run: '& "$env:GITHUB_WORKSPACE\.github\scripts\updater-smoke.ps1"'
 
       - name: Uninstall
         run: |

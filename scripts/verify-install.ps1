@@ -13,11 +13,16 @@
 
   Run:  .\scripts\verify-install.ps1
         .\scripts\verify-install.ps1 -TimeoutSeconds 300     # slow first boot (migrations)
+        .\scripts\verify-install.ps1 -ExpectedVersion v1.1.17  # after a rollback
 #>
 [CmdletBinding()]
 param(
   # How long to wait for each layer to come up (edge-node runs migrations on first boot).
-  [int] $TimeoutSeconds = 180
+  [int] $TimeoutSeconds = 180,
+  # The edge-node version that must be running. Default: the versions.json pin.
+  [string] $ExpectedVersion,
+  # Skip the version check (e.g. back on a local build after a rollback).
+  [switch] $AnyVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -68,7 +73,9 @@ $pins    = (Get-Content (Join-Path $Root 'versions.json') -Raw | ConvertFrom-Jso
 # --- 1. services --------------------------------------------------------------------
 Step "Services"
 $expected = 'laguna-postgres','laguna-edge-node','laguna-next','laguna-caddy'
-if (Get-Service laguna-alloy -ErrorAction SilentlyContinue) { $expected += 'laguna-alloy' }
+foreach ($opt in 'laguna-alloy','laguna-updater') {
+  if (Get-Service $opt -ErrorAction SilentlyContinue) { $expected += $opt }
+}
 foreach ($svc in $expected) {
   $ok = Wait-Until { (Get-Service $svc -ErrorAction SilentlyContinue).Status -eq 'Running' } 60
   if ($ok) { Pass "$svc Running" } else { Fail "$svc is '$((Get-Service $svc -ErrorAction SilentlyContinue).Status)'" }
@@ -88,13 +95,15 @@ if (-not $ok) {
   $installed = $null
   $relFile = Join-Path $Root 'artifacts\edge-node\RELEASE'
   if (Test-Path $relFile) { $installed = (Get-Content $relFile -Raw).Trim() }
-  $want = "$($pins.'edge-node'.version)"
-  if ($installed -like 'local-*') {
+  $want = if ($ExpectedVersion) { $ExpectedVersion } else { "$($pins.'edge-node'.version)" }
+  if ($AnyVersion) {
+    Write-Host "  note version = $($status.version) (not checked: -AnyVersion)" -ForegroundColor Yellow
+  } elseif ($installed -like 'local-*') {
     Write-Host "  note local build installed ($installed); not checking against versions.json" -ForegroundColor Yellow
   } elseif ($status.version -eq $want) {
-    Pass "version = $($status.version) (pinned in versions.json)"
+    Pass "version = $($status.version) (expected)"
   } else {
-    Fail "version = '$($status.version)', versions.json pins '$want'"
+    Fail "version = '$($status.version)', expected '$want'"
   }
 }
 Stop-OnFailure 'edge-node'

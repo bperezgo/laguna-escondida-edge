@@ -46,6 +46,7 @@ services\next.exe start
 | `next.xml` | `laguna-next` | 127.0.0.1:3000 | edge-node |
 | `caddy.xml` | `laguna-caddy` | **:443/:80 (LAN)** | next |
 | `alloy.xml` | `laguna-alloy` | 127.0.0.1:4317/:4318/:12345 | — (deliberately none) |
+| `updater.xml` | `laguna-updater` | nothing (outbound HTTPS only) | — (deliberately none) |
 
 `<depend>` makes Windows start dependencies first (and refuse to start a service if its
 dependency failed). That gives us: Postgres → edge-node → next → caddy.

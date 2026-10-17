@@ -8,8 +8,8 @@
 $ErrorActionPreference = 'Stop'
 $Root     = Split-Path -Parent $PSScriptRoot
 $Services = Join-Path $Root 'services'
-# Reverse of install. 'alloy' is always listed so a box that dropped env\alloy.env is cleaned too.
-$order    = 'caddy','next','edge-node','postgres','alloy'
+# Reverse of install. The optional services are always listed so a box that dropped one is cleaned too.
+$order    = 'updater','caddy','next','edge-node','postgres','alloy'
 
 foreach ($name in $order) {
   $svcId = "laguna-$name"

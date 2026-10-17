@@ -260,6 +260,10 @@ the safety steps from §4:
 - [ ] Compatibility **pre-flight gate** in the deploy procedure (§5 step 1).
 
 ### Phase D — Fleet (only if/when many sites)
+
+> Designed out in detail in [`EDGE_REMOTE_UPDATE_PLAN.md`](EDGE_REMOTE_UPDATE_PLAN.md) —
+> how a box learns a new version exists and installs it with nobody on site.
+
 - [ ] Single versioned appliance bundle (Rung 3) + code-signing.
 - [ ] Central record of which box runs which version + remote health rollup.
 - [ ] Staged rollout (canary one box before the rest).
