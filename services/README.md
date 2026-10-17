@@ -82,7 +82,7 @@ Two patterns, depending on the service:
 
 **Before first real install:**
 - Copy `env/edge-node.env.example` → `env/edge-node.env` and fill in the real values
-  (DB password, `JWT_SECRET`, `ADMIN_API_KEY`, `SPACES_*`, `ELECTRONIC_INVOICE_*`, cloud-sync
+  (DB password, `JWT_SECRET`, `ADMIN_API_KEY`, `STORAGE_*`, `ELECTRONIC_INVOICE_*`, cloud-sync
   vars, printer target).
 
 Logs for every service roll under `..\logs\` (configured via `<logpath>` + `<log>`).

@@ -159,7 +159,7 @@ Fill every `CHANGE_ME` / `(required)` value. **Critical:** `DB_PASSWORD` must eq
 - `DB_PASSWORD` — must match step 5.
 - `ORGANIZATION_ID`, `JWT_SECRET`, `ADMIN_API_KEY` — required, the box won't start without them.
 - `CLOUD_SYNC_URL` + `NODE_SYNC_KEY` — set to enable cloud sync; leave blank for local-only.
-- `SPACES_*`, `ELECTRONIC_INVOICE_*` — required for storage + invoicing features.
+- `STORAGE_*`, `ELECTRONIC_INVOICE_*` — required for storage + invoicing features.
 - `PRINTER_TRANSPORT=windows`, `PRINTER_TARGET=<exact Windows printer name>`.
 
 > `env\edge-node.env` is **gitignored** and holds real secrets. Never commit it. `install.ps1`
