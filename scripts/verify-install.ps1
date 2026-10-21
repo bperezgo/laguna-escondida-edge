@@ -3,7 +3,7 @@
   The scripted subset of docs\VALIDATION.md, bottom-up so the first failure names the layer:
 
     1. every laguna-* service is Running
-    2. edge-node answers /api/edge/status in edge mode, running the pinned release
+    2. edge-node answers /api/edge/status in edge mode, running the installed release
     3. Next answers on 127.0.0.1:3000
     4. Caddy serves HTTPS on LAGUNA_LAN_IP (and LAGUNA_LAN_HOST, if set) with a cert this box
        trusts, redirects are relative (no localhost:3000 leak), and :80 redirects to https
@@ -88,13 +88,15 @@ if (-not $ok) {
   $installed = $null
   $relFile = Join-Path $Root 'artifacts\edge-node\RELEASE'
   if (Test-Path $relFile) { $installed = (Get-Content $relFile -Raw).Trim() }
-  $want = "$($pins.'edge-node'.version)"
+  $pin = "$($pins.'edge-node'.version)"
   if ($installed -like 'local-*') {
-    Write-Host "  note local build installed ($installed); not checking against versions.json" -ForegroundColor Yellow
-  } elseif ($status.version -eq $want) {
-    Pass "version = $($status.version) (pinned in versions.json)"
+    Write-Host "  note local build installed ($installed); not checking the version" -ForegroundColor Yellow
+  } elseif ($status.version -ne $installed) {
+    Fail "version = '$($status.version)', artifacts\edge-node\RELEASE says '$installed'"
+  } elseif ($installed -eq $pin) {
+    Pass "version = $installed (pinned in versions.json)"
   } else {
-    Fail "version = '$($status.version)', versions.json pins '$want'"
+    Pass "version = $installed (versions.json pins $pin; installed from the POS updater)"
   }
 }
 Stop-OnFailure 'edge-node'
@@ -132,3 +134,4 @@ else { Fail "http://$LanIp/ -> '$($r -join ' ')', expected a redirect to https" 
 Stop-OnFailure 'caddy'
 
 Write-Host "`nAll checks passed." -ForegroundColor Green
+exit 0

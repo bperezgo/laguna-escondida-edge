@@ -216,4 +216,5 @@ if ! gh release create "$VERSION" -R "$OWNER/$EDGE_REPO" --verify-tag --title "$
 fi
 rm -rf "$OUT"
 printf '\n\033[32mReleased %s\033[0m  https://github.com/%s/%s/releases/tag/%s\n' "$VERSION" "$OWNER" "$EDGE_REPO" "$VERSION"
-echo "On each box (until laguna-updater exists): git pull, then scripts\\update.ps1 -Service edge-node / next."
+echo "Boxes are offered new app releases in the POS (scripts/updater.ps1). For scripts, Caddyfile or"
+echo "services changes: git pull on each box, then scripts\\install.ps1."

@@ -3,7 +3,7 @@ name: Install smoke test (Windows)
 # Full appliance lifecycle on a clean Windows machine, so a change to the scripts, service
 # definitions, Caddyfile or pinned versions is proven without a physical box:
 #   fetch (verified releases) -> init Postgres -> install -> verify -> re-install (idempotent)
-#   -> update next + edge-node -> verify -> uninstall
+#   -> update next + edge-node -> verify -> owner-triggered update (updater task) -> uninstall
 #
 # What it does NOT cover: a real LAN/tablet, local DNS, the printer, the cloud sync peer, and
 # Windows 10/11 specifics (runners are Windows Server). edge-node points at an unreachable
@@ -150,6 +150,49 @@ jobs:
           & "$env:LAGUNA_ROOT\scripts\update.ps1" -Service next
           & "$env:LAGUNA_ROOT\scripts\update.ps1" -Service edge-node
           & "$env:LAGUNA_ROOT\scripts\verify-install.ps1"
+
+      # What an admin's click does: the request file is picked up by the real scheduled task
+      # (as SYSTEM). The 30-min check can't reach the cloud here, so stage the offer by hand.
+      - name: Owner-triggered update (Laguna Updater task)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $root  = $env:LAGUNA_ROOT
+          $state = "$root\state"
+          $task = Get-ScheduledTask 'Laguna Updater'
+          if ($task.Triggers[0].Repetition.Interval -ne 'PT1M') { throw "task repeats every '$($task.Triggers[0].Repetition.Interval)', expected PT1M" }
+
+          $edgeNode = (Get-Content "$root\artifacts\edge-node\RELEASE" -Raw).Trim()
+          $next     = (Get-Content "$root\artifacts\next\RELEASE" -Raw).Trim()
+          $releases = Invoke-RestMethod 'https://api.github.com/repos/bperezgo/laguna-escondida-frontend/releases?per_page=20' `
+            -Headers @{ Authorization = "Bearer $env:GH_TOKEN" }
+          $other = $releases | Where-Object {
+            -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '^v\d+\.\d+\.\d+$' -and
+            $_.tag_name -ne $next -and ($_.assets.name -contains "next-standalone-windows-$($_.tag_name).zip")
+          } | Select-Object -First 1
+          if (-not $other) { throw 'no other frontend release with a Windows asset to update to' }
+          $target  = $other.tag_name
+          $version = "$edgeNode+$target"
+          "update: next $next -> $target"
+
+          $available = @{ version = $version; current = "$edgeNode+$next"; components = @{ 'edge-node' = $edgeNode; next = $target } }
+          [IO.File]::WriteAllText("$state\update-available.json", ($available | ConvertTo-Json))
+          [IO.File]::WriteAllText("$state\update-requested.json", (@{ version = $version; requested_by = 'ci' } | ConvertTo-Json))
+          Start-ScheduledTask 'Laguna Updater'
+
+          $deadline = (Get-Date).AddMinutes(12)
+          while (-not (Test-Path "$state\update-result.json") -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 5 }
+          Get-Content "$root\logs\updater.log" -ErrorAction SilentlyContinue
+          if (-not (Test-Path "$state\update-result.json")) { throw 'the updater wrote no result within 12 min' }
+          $result = Get-Content "$state\update-result.json" -Raw | ConvertFrom-Json
+          if ($result.outcome -ne 'success') { throw "updater outcome '$($result.outcome)': $($result.message)" }
+          $installedNext = (Get-Content "$root\artifacts\next\RELEASE" -Raw).Trim()
+          if ($installedNext -ne $target) { throw "next is $installedNext, expected $target" }
+          if ((Get-Content "$state\installed.json" -Raw | ConvertFrom-Json).version -ne $version) { throw 'installed.json not updated' }
+          foreach ($f in 'update-requested.json', 'update-progress.json', 'update-available.json') {
+            if (Test-Path "$state\$f") { throw "$f left behind" }
+          }
+          & "$root\scripts\verify-install.ps1"
 
       - name: Uninstall
         run: |

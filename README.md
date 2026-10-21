@@ -42,7 +42,8 @@ Telemetry is **opt-in** and runs on its own path, separate from the business-dat
 | `scripts/uninstall.ps1` | Remove all services + firewall rule |
 | `scripts/verify-install.ps1` | Automated post-install check (services, edge-node version, Next, Caddy HTTPS); also run by the Windows install smoke test in CI |
 | `scripts/fetch-artifacts.ps1` | Download off-the-shelf binaries (Caddy, Alloy, Node, Postgres) and the sha256-verified app releases (edge-node, next) into `artifacts/` |
-| `scripts/update.ps1` | Swap one service to a new pinned version |
+| `scripts/update.ps1` | Swap one service to a new pinned version (or `-Tag`) |
+| `scripts/updater.ps1` | Owner-triggered updates: offers new releases in the POS, installs on an admin's click — see [`docs/UPDATE_PROTOCOL.md`](docs/UPDATE_PROTOCOL.md) |
 | `scripts/set-lan-ip.ps1` | Re-point the box at its current LAN IP after DHCP moved it (run as Admin) |
 | `env/box.env.example` | Template for this box's LAN IP/subnet; copy to `env/box.env` (gitignored) |
 | `scripts/release.sh` | (developer machine) Pin the latest app releases, check cloud-first, tag + publish an edge release with `manifest.json` |

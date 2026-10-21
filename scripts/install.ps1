@@ -186,6 +186,17 @@ if (-not $InstallAlloy) {
   Write-Host "Telemetry sidecar config OK -> $($alloyCfg['LAGUNA_TELEMETRY_INGEST_URL']) (node $($alloyCfg['LAGUNA_NODE_ID']))"
 }
 
+# --- 1e. Owner-triggered updates: the updater's state and DB backup dirs -------------
+# SYSTEM and Administrators only: a request file starts an install, and backups hold the whole DB.
+$StateDir = Join-Path $Root 'state'
+foreach ($d in $StateDir, (Join-Path $Root 'backups')) {
+  New-Item -ItemType Directory -Force -Path $d | Out-Null
+  & icacls $d /inheritance:r /grant '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /C /Q | Out-Null
+}
+if (-not (Select-String -Path $EnvSrc -Pattern '^\s*LAGUNA_STATE_DIR\s*=\s*[^\s#]' -Quiet)) {
+  Write-Warning "env\edge-node.env has no LAGUNA_STATE_DIR, so the POS will not offer updates. Add: LAGUNA_STATE_DIR=$StateDir"
+}
+
 # --- 2. Install services in dependency order --------------------------------------
 # WinSW finds <name>.xml by matching the copied exe's basename.
 $order = 'postgres','edge-node','next','caddy'
@@ -283,6 +294,19 @@ if ($InstallAlloy) {
     }
   }
 }
+
+# --- 3d. Updater task: scripts\updater.ps1 as SYSTEM every minute (docs\UPDATE_PROTOCOL.md) ---
+$UpdaterTask = 'Laguna Updater'
+$action    = New-ScheduledTaskAction -Execute 'powershell.exe' `
+  -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$PSScriptRoot\updater.ps1`""
+$trigger   = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)
+$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+# IgnoreNew: an update takes minutes, and the next tick must not start a second one.
+$settings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable `
+  -ExecutionTimeLimit (New-TimeSpan -Minutes 45) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName $UpdaterTask -Action $action -Trigger $trigger `
+  -Principal $principal -Settings $settings -Force | Out-Null
+Write-Host "Registered scheduled task '$UpdaterTask' (offers updates in the POS, installs them on request)."
 
 # --- 4. Windows Firewall: allow :443/:80 ONLY from known tablet IPs ----------------
 $ruleName = 'Laguna POS - Caddy (LAN tablets)'

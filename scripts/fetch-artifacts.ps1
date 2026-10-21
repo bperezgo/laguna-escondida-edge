@@ -10,11 +10,13 @@
   scripts\build-artifacts.ps1 remains as a developer fallback for unreleased code.
 
   The installed tag is recorded in artifacts\<app>\RELEASE, so re-running is a no-op until
-  versions.json changes (or -Force).
+  versions.json changes (or -Force). A release newer than the pin, installed from the POS by
+  scripts\updater.ps1 (-Tag), is kept rather than downgraded.
 
   Run:  .\scripts\fetch-artifacts.ps1                         # everything
         .\scripts\fetch-artifacts.ps1 -Only node,postgres     # subset
         .\scripts\fetch-artifacts.ps1 -Only next -DownloadOnly # download + verify into the cache only
+        .\scripts\fetch-artifacts.ps1 -Only next -Tags @{ next = 'v1.0.4' }   # a tag other than the pin
 #>
 [CmdletBinding()]
 param(
@@ -24,7 +26,9 @@ param(
   [switch]   $Force,        # re-download/re-install even if the target already exists
   # App artifacts only: download + verify into the local cache, do not touch artifacts\.
   # update.ps1 uses this BEFORE stopping a service, so the download is not downtime.
-  [switch]   $DownloadOnly
+  [switch]   $DownloadOnly,
+  # App artifacts only: release tags to use instead of the versions.json pins.
+  [hashtable] $Tags = @{}
 )
 
 $ErrorActionPreference = 'Stop'
@@ -128,11 +132,10 @@ $AppAssets = @{
 
 # Download <asset> and <asset>.sha256 for $tag into the cache and verify. Returns the zip
 # path. A cached zip is re-verified, never trusted blindly; a bad one is deleted.
-function Get-VerifiedRelease($app) {
+function Get-VerifiedRelease($app, $tag) {
   $pin = $v.artifacts.$app
-  $tag = "$($pin.version)"
   if ($tag -notmatch '^v\d+\.\d+\.\d+') {
-    throw ("versions.json pins $app to '$tag', which is not a release tag. Set " +
+    throw ("$app '$tag' is not a release tag. Set " +
            "artifacts.$app.version to a tag of $($pin.repo) that has a Windows release asset (e.g. v1.2.0), " +
            "or build from source with scripts\build-artifacts.ps1 -Only $app.")
   }
@@ -142,7 +145,13 @@ function Get-VerifiedRelease($app) {
   $sumF  = "$zip.sha256"
 
   Write-Host "  $($pin.repo) $tag"
-  Invoke-WebRequest -Uri "$base/$asset.sha256" -OutFile $sumF -UseBasicParsing
+  try {
+    Invoke-WebRequest -Uri "$base/$asset.sha256" -OutFile $sumF -UseBasicParsing
+  } catch {
+    # Offline: a zip verified earlier can still be reinstalled, e.g. by an updater rollback.
+    if (-not (Test-Path $zip) -or -not (Test-Path $sumF)) { throw }
+    Write-Host "  offline -- using the cached checksum" -ForegroundColor Yellow
+  }
   $expected = ((Get-Content $sumF -Raw).Trim() -split '\s+')[0].ToLower()
   if ($expected -notmatch '^[0-9a-f]{64}$') { throw "$asset.sha256 is not a sha256 checksum." }
 
@@ -167,16 +176,29 @@ function Get-InstalledRelease($dest) {
   return $null
 }
 
+# True if release tag $a is newer than $b.
+function Test-NewerTag($a, $b) {
+  if ("$a" -notmatch '^v\d+\.\d+\.\d+$' -or "$b" -notmatch '^v\d+\.\d+\.\d+$') { return $false }
+  return [version]$a.Substring(1) -gt [version]$b.Substring(1)
+}
+
 foreach ($a in 'edge-node','next') {
   if (-not (Want $a)) { continue }
-  $tag  = "$($v.artifacts.$a.version)"
+  $tag  = if ($Tags.ContainsKey($a)) { "$($Tags[$a])" } else { "$($v.artifacts.$a.version)" }
   $dest = Join-Path $Artifacts $a
   Step "App artifact: $a $tag"
-  if (-not $DownloadOnly -and -not $Force -and (Get-InstalledRelease $dest) -eq $tag) {
-    Write-Host "  $tag already installed -- skip (use -Force to reinstall)."
-    continue
+  $installed = Get-InstalledRelease $dest
+  if (-not $DownloadOnly -and -not $Force) {
+    if ($installed -eq $tag) {
+      Write-Host "  $tag already installed -- skip (use -Force to reinstall)."
+      continue
+    }
+    if (-not $Tags.ContainsKey($a) -and (Test-NewerTag $installed $tag)) {
+      Write-Host "  $installed (installed from the POS) is newer than the pin $tag -- skip."
+      continue
+    }
   }
-  $zip = Get-VerifiedRelease $a
+  $zip = Get-VerifiedRelease $a $tag
   if ($DownloadOnly) { Write-Host "  staged: $zip" -ForegroundColor Green; continue }
 
   # Unpack to a scratch dir first, check the layout, THEN replace the live folder.

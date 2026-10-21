@@ -6,18 +6,22 @@
   fetch-artifacts.ps1 (sha256-verified). The download + verify happens BEFORE the service is
   stopped, so downtime is only the swap. -FromSource rebuilds from the sibling repos with
   build-artifacts.ps1 instead (developer fallback). Infra services (caddy, postgres, alloy)
-  are re-fetched via fetch-artifacts.ps1.
+  are re-fetched via fetch-artifacts.ps1. -Tag installs that release instead of the pin
+  (scripts\updater.ps1 uses it).
 
   Usage:  .\scripts\update.ps1 -Service next
           .\scripts\update.ps1 -Service edge-node
           .\scripts\update.ps1 -Service edge-node -FromSource
+          .\scripts\update.ps1 -Service next -Tag v1.0.4
           .\scripts\update.ps1 -Service alloy
 #>
 param(
   [Parameter(Mandatory)]
   [ValidateSet('edge-node','next','caddy','postgres','alloy')]
   [string] $Service,
-  [switch] $FromSource
+  [switch] $FromSource,
+  [ValidatePattern('^v\d+\.\d+\.\d+$')]
+  [string] $Tag
 )
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
@@ -26,10 +30,25 @@ if (-not (Test-Path $exe)) { throw "$Service is not installed. Run install.ps1 f
 
 $isApp   = $Service -in 'edge-node','next'
 $fetch   = Join-Path $PSScriptRoot 'fetch-artifacts.ps1'
+$tags    = @{}
+if ($Tag) {
+  if (-not $isApp -or $FromSource) { throw "-Tag only applies to edge-node and next, without -FromSource." }
+  $tags[$Service] = $Tag
+} elseif ($isApp -and -not $FromSource) {
+  $pin = "$((Get-Content (Join-Path $Root 'versions.json') -Raw | ConvertFrom-Json).artifacts.$Service.version)"
+  $relFile = Join-Path $Root "artifacts\$Service\RELEASE"
+  $installed = if (Test-Path $relFile) { (Get-Content $relFile -Raw).Trim() } else { '' }
+  $semver = '^v\d+\.\d+\.\d+$'
+  if ($installed -match $semver -and $pin -match $semver -and
+      [version]$installed.Substring(1) -gt [version]$pin.Substring(1)) {
+    throw ("$Service $installed was installed from the POS and is newer than the versions.json pin $pin. " +
+           "Pull this repo, or pass -Tag $pin to downgrade on purpose.")
+  }
+}
 if ($isApp -and -not $FromSource) {
   # Fail here (checksum, bad pin, no network) while the service is still running.
   Write-Host "Downloading + verifying the $Service release ..."
-  & $fetch -Only $Service -DownloadOnly
+  & $fetch -Only $Service -DownloadOnly -Tags $tags
 }
 
 # Stopping a service also stops its running dependents (caddy -> next -> edge-node -> postgres),
@@ -53,7 +72,7 @@ if ($isApp -and $FromSource) {
   & (Join-Path $PSScriptRoot 'build-artifacts.ps1') -Only $Service
 } elseif ($isApp) {
   Write-Host "Installing the staged $Service release ..."
-  & $fetch -Only $Service -Force
+  & $fetch -Only $Service -Force -Tags $tags
 } else {
   Write-Host "Re-fetching $Service binary ..."
   & $fetch -Only $Service -Force
