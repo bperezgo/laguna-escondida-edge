@@ -8,11 +8,11 @@
     "artifacts": {
         "edge-node": {
             "repo": "laguna-escondida-backend",
-            "version": "bca2887"
+            "version": "v1.1.19"
         },
         "next": {
             "repo": "laguna-escondida-frontend",
-            "version": "0b8017f"
+            "version": "v1.0.2"
         }
     }
 }
