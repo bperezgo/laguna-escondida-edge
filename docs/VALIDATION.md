@@ -5,6 +5,11 @@ Run these checks after an install/update, or any time something looks wrong. The
 tells you exactly where the problem is. Every command is copy-paste from an elevated PowerShell
 on the box.
 
+> **Automated subset:** `.\scripts\verify-install.ps1` runs the services → edge-node → Next →
+> Caddy checks below in one go (read-only, exits non-zero on the first failing layer). CI runs the
+> same script after a full install on a clean Windows runner
+> (`.github/workflows/install-smoke.yml`), so most regressions are caught before they reach a box.
+
 > Convention: install root is `C:\laguna-edge`, LAN IP is `192.168.0.123` (this box's
 > `LAGUNA_LAN_IP` from `env\box.env` — the single source of truth; substitute yours). `curl.exe`
 > (not the `curl` alias) is used so flags behave like real curl.

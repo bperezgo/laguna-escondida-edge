@@ -40,10 +40,12 @@ Telemetry is **opt-in** and runs on its own path, separate from the business-dat
 | `services/*.xml` | WinSW Windows-service definitions (one per process) — see `services/README.md` |
 | `scripts/install.ps1` | Register all services + stage edge-node `.env` + firewall rule (run as Admin) |
 | `scripts/uninstall.ps1` | Remove all services + firewall rule |
-| `scripts/fetch-artifacts.ps1` | Download off-the-shelf binaries (Caddy, Node, Postgres) into `artifacts/` |
+| `scripts/verify-install.ps1` | Automated post-install check (services, edge-node version, Next, Caddy HTTPS); also run by the Windows install smoke test in CI |
+| `scripts/fetch-artifacts.ps1` | Download off-the-shelf binaries (Caddy, Alloy, Node, Postgres) and the sha256-verified app releases (edge-node, next) into `artifacts/` |
 | `scripts/update.ps1` | Swap one service to a new pinned version |
 | `scripts/set-lan-ip.ps1` | Re-point the box at its current LAN IP after DHCP moved it (run as Admin) |
 | `env/box.env.example` | Template for this box's LAN IP/subnet; copy to `env/box.env` (gitignored) |
+| `scripts/release.sh` | (developer machine) Pin the latest app releases, check cloud-first, tag + publish an edge release with `manifest.json` |
 | `env/edge-node.env.example` | Template for the backend's per-box config; copy to `env/edge-node.env` (gitignored) |
 | `env/alloy.env.example` | Template for the telemetry sidecar; copy to `env/alloy.env` to ENABLE telemetry (omit it and there is no sidecar) |
 | `versions.json` | Pinned versions (WinSW, Caddy, Node, Postgres, app artifacts) |

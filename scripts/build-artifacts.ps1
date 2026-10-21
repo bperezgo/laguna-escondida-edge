@@ -7,6 +7,9 @@
 
   Off-the-shelf binaries (Caddy, Node, Postgres) come from scripts\fetch-artifacts.ps1, not here.
 
+  DEVELOPER FALLBACK: production boxes install CI-built GitHub Releases with
+  scripts\fetch-artifacts.ps1. Use this only to run unreleased code.
+
   Run:  .\scripts\build-artifacts.ps1                         # build both
         .\scripts\build-artifacts.ps1 -Only edge-node         # just one
         .\scripts\build-artifacts.ps1 -BackendRepo C:\src\be -FrontendRepo C:\src\fe
@@ -22,8 +25,7 @@ param(
   [string] $BackendRepo,
   [string] $FrontendRepo,
 
-  # Baked into the Next build. Read SERVER-SIDE by Next to reach the local Go backend
-  # (see ai-plan\EDGE_WINDOWS_SERVICES_PLAN.md §2.1 -- the tablet never uses this).
+  # Baked into the Next build; used server-side only.
   [string] $BackendApiUrl = 'http://127.0.0.1:8080/api'
 )
 
@@ -37,20 +39,14 @@ if (-not $FrontendRepo) { $FrontendRepo = Join-Path $Parent 'laguna-escondida-fr
 function Want($n) { $Only -contains $n }
 function Step($m) { Write-Host ("`n==> " + $m) -ForegroundColor Cyan }
 
-# Run a command line via cmd so its stderr is merged INSIDE cmd (2>&1), not wrapped by
-# PowerShell 5.1 as a terminating NativeCommandError. Inherited $env:* are visible to the
-# child. Throws on a non-zero exit using the real exit code.
+# Through cmd so PowerShell 5.1 doesn't turn native stderr into a terminating error.
 function Run($cmdLine, $what) {
   & cmd /c "$cmdLine 2>&1" | ForEach-Object { Write-Host $_ }
   if ($LASTEXITCODE -ne 0) { throw "$what failed (exit $LASTEXITCODE)" }
 }
 
-# Can `next build` create the symlink its standalone packer needs (node_modules\next)?
-# On Windows that requires EITHER an elevated process OR Developer Mode (Node's fs.symlink
-# passes SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE, which Developer Mode honors).
-# NOTE: we check Developer Mode / elevation directly -- a raw PowerShell New-Item
-# -ItemType SymbolicLink does NOT pass the unprivileged flag, so it would false-negative
-# under Developer Mode even though the actual build succeeds.
+# `next build` standalone needs symlinks: elevation or Developer Mode. Checked directly because
+# a New-Item symlink probe fails under Developer Mode even though Node's symlink works.
 function Test-SymlinkCapability {
   $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
   if ($elevated) { return $true }
@@ -61,8 +57,6 @@ function GitSha($repo) {
   try { $s = (& git -C $repo rev-parse --short HEAD 2>$null); if ($LASTEXITCODE -eq 0) { return $s.Trim() } } catch {}
   return 'unknown'
 }
-# Parse a KEY=VALUE .env file (ignoring blanks and #comments) into an ordered map. Used to load
-# per-box NEXT_PUBLIC_* build-time vars from env\next.env. Mirrors the box.env parser in install.ps1.
 function Read-DotEnv($path) {
   $map = [ordered]@{}
   if (-not (Test-Path $path)) { return $map }
@@ -74,12 +68,9 @@ function Read-DotEnv($path) {
   }
   return $map
 }
-# Record what we built into versions.json (traceability for a single-site install).
+# "local-<sha>" never matches a pinned tag, so fetch-artifacts.ps1 replaces it on its next run.
 function Stamp($key, $sha) {
-  $vf = Join-Path $Root 'versions.json'
-  $v  = Get-Content $vf -Raw | ConvertFrom-Json
-  $v.artifacts.$key.version = $sha
-  ($v | ConvertTo-Json -Depth 10) | Set-Content $vf -Encoding utf8
+  Set-Content (Join-Path (Join-Path $Artifacts $key) 'RELEASE') "local-$sha" -Encoding ascii
 }
 
 # --- edge-node (Go) ----------------------------------------------------------------
@@ -96,10 +87,10 @@ if (Want 'edge-node') {
 
   Push-Location $BackendRepo
   try {
-    # CGO off => static build, no gcc needed (matches the repo's Dockerfile). GOOS/GOARCH
-    # default to the host (windows/amd64) but we set them explicitly for determinism.
     $env:CGO_ENABLED = '0'; $env:GOOS = 'windows'; $env:GOARCH = 'amd64'
-    & go build -ldflags '-s -w' -o $out ./cmd
+    # Reported by /api/edge/status.
+    $ver = "local-$(GitSha $BackendRepo)"
+    & go build -ldflags "-s -w -X laguna-escondida/backend/internal/platform/buildinfo.Version=$ver" -o $out ./cmd
     if ($LASTEXITCODE -ne 0) { throw "go build failed ($LASTEXITCODE)" }
   } finally {
     Pop-Location
@@ -117,13 +108,9 @@ if (Want 'next') {
   $cfgPath = Join-Path $FrontendRepo 'next.config.js'
   if (-not (Test-Path $cfgPath)) { throw "Frontend repo not found at $FrontendRepo (expected next.config.js). Pass -FrontendRepo." }
   if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) { throw "pnpm is not on PATH." }
-  # Guard: without standalone output there is no server.js to ship.
   if ((Get-Content $cfgPath -Raw) -notmatch "output:\s*[`"']standalone[`"']") {
     throw "next.config.js does not set output: 'standalone'. Enable it in the frontend repo first."
   }
-  # Preflight: Next's standalone packer creates a symlink (node_modules\next) -- Windows
-  # blocks that without Developer Mode or elevation. Fail fast with the remedy rather than
-  # after a multi-minute build.
   if (-not (Test-SymlinkCapability)) {
     throw @'
 This process cannot create symbolic links, which "next build" (output: standalone) requires
@@ -137,17 +124,14 @@ See ai-plan\EDGE_WINDOWS_SERVICES_PLAN.md (Phase 2, build prerequisites).
   }
 
   $dest = Join-Path $Artifacts 'next'
-  if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }   # clean rebuild: never leave stale chunks
+  if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
   New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
-  # Per-box NEXT_PUBLIC_* the CLIENT bundle reads (e.g. NEXT_PUBLIC_ORDER_ACTION_PIN) are
-  # inlined at BUILD time, so they must be in the environment for `pnpm build` — setting them
-  # only in services\next.xml (runtime) never reaches the browser. Source them from env\next.env
-  # (gitignored; copy env\next.env.example). Missing file => none applied (build still works).
+  # Client NEXT_PUBLIC_* vars are inlined at build time; setting them in services\next.xml has no effect.
   $frontendEnvFile = Join-Path $Root 'env\next.env'
   $frontendEnv     = Read-DotEnv $frontendEnvFile
   if ($frontendEnv.Count) {
-    # Log KEYS ONLY — values may be secret-ish (a PIN) and must not land in build logs.
+    # Keys only: values may be secrets.
     Write-Host ("  Frontend build env from env\next.env: " + (($frontendEnv.Keys) -join ', ')) -ForegroundColor DarkGray
   } else {
     Write-Warning "env\next.env not found (or empty). No per-box NEXT_PUBLIC_* inlined (e.g. NEXT_PUBLIC_ORDER_ACTION_PIN). Copy env\next.env.example if the app needs them."
@@ -155,9 +139,8 @@ See ai-plan\EDGE_WINDOWS_SERVICES_PLAN.md (Phase 2, build prerequisites).
 
   Push-Location $FrontendRepo
   try {
-    $env:NEXT_PUBLIC_API_URL = $BackendApiUrl   # inlined at build time (server-only usage)
+    $env:NEXT_PUBLIC_API_URL = $BackendApiUrl
     $env:NODE_ENV = 'production'
-    # Apply every key from env\next.env verbatim (adding a new NEXT_PUBLIC_* needs no change here).
     foreach ($k in $frontendEnv.Keys) { Set-Item -Path "Env:\$k" -Value $frontendEnv[$k] }
     Step "pnpm install --frozen-lockfile"
     Run "pnpm install --frozen-lockfile" "pnpm install"
@@ -180,29 +163,20 @@ See ai-plan\EDGE_WINDOWS_SERVICES_PLAN.md (Phase 2, build prerequisites).
   $srcNm = Join-Path $standalone 'node_modules'
   $dstNm = Join-Path $dest 'node_modules'
 
-  # 1) Copy the whole standalone tree (server.js, .next\server, node_modules incl. the .pnpm
-  #    store) into all-real directories. pnpm's store defeats Copy-Item (access denied),
-  #    verbatim symlinks (un-stat-able at runtime), and fs.cpSync dereference (store has a
-  #    symlink cycle -> stack overflow). copy-standalone.js resolves links to real dirs with
-  #    cycle detection. Top-level package links are fixed in step 2 as junctions.
+  # 1) Copy the standalone tree into real directories (see copy-standalone.js for why).
   & node (Join-Path $PSScriptRoot 'copy-standalone.js') $standalone $dest
   if ($LASTEXITCODE -ne 0) { throw "copying standalone tree failed (copy-standalone.js exit $LASTEXITCODE)" }
 
-  # 2) Repair top-level packages. pnpm makes them (next, react, ...) symlinks into its .pnpm
-  #    store; step 1 turned them into DETACHED real dirs, severing them from their .pnpm
-  #    siblings (e.g. styled-jsx) and breaking resolution. Replace each with a JUNCTION into the
-  #    bundle's OWN .pnpm. Junctions need no privilege and Node follows them fine at runtime
-  #    (unlike the store's symlinks, which EPERM). NOTE: junctions store an ABSOLUTE target, so
-  #    build the artifact at its final install location (do not build then move artifacts\next).
+  # 2) Step 1 detached top-level packages from their .pnpm siblings; relink them as junctions.
+  #    Junctions store absolute targets, so build artifacts\next in place, never move it.
   if (Test-Path $srcNm) {
     $dstNmAbs = (Resolve-Path $dstNm).Path
     foreach ($lnk in @(Get-ChildItem $srcNm -Force | Where-Object { $_.LinkType })) {
       $t = $lnk.Target; if ($t -is [array]) { $t = $t[0] }
-      # pnpm emits the target as either absolute (...\node_modules\.pnpm\<pkg>\...) or relative
-      # (.pnpm\<pkg>\...). Anchor on '.pnpm\' either way and keep the rest as the local path.
+      # Targets may be absolute or relative; anchor on '.pnpm\' either way.
       $i = $t.IndexOf('.pnpm\')
       if ($i -lt 0) { Write-Warning "node_modules\$($lnk.Name): link target not in .pnpm ($t) -- left as copied"; continue }
-      $localTarget = Join-Path $dstNmAbs $t.Substring($i)       # .pnpm\<pkg>\node_modules\<pkg>
+      $localTarget = Join-Path $dstNmAbs $t.Substring($i)
       $linkPath    = Join-Path $dstNm $lnk.Name
       if (-not (Test-Path $localTarget))      { throw "node_modules\$($lnk.Name): target missing in bundle: $localTarget" }
       if ($linkPath -notlike "$dstNmAbs\*")   { throw "refusing to modify $linkPath (outside bundle)" }
@@ -211,7 +185,7 @@ See ai-plan\EDGE_WINDOWS_SERVICES_PLAN.md (Phase 2, build prerequisites).
     }
   }
 
-  # 3) static assets + public are NOT in the standalone output -- place them next to server.js
+  # 3) Standalone output omits static assets and public\.
   New-Item -ItemType Directory -Force -Path (Join-Path $dest '.next') | Out-Null
   Copy-Item -Path $static -Destination (Join-Path $dest '.next') -Recurse -Force
   if (Test-Path $public) { Copy-Item -Path $public -Destination $dest -Recurse -Force }

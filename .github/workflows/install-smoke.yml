@@ -1,0 +1,180 @@
+name: Install smoke test (Windows)
+
+# Full appliance lifecycle on a clean Windows machine, so a change to the scripts, service
+# definitions, Caddyfile or pinned versions is proven without a physical box:
+#   fetch (verified releases) -> init Postgres -> install -> verify -> re-install (idempotent)
+#   -> update next + edge-node -> verify -> uninstall
+#
+# What it does NOT cover: a real LAN/tablet, local DNS, the printer, the cloud sync peer, and
+# Windows 10/11 specifics (runners are Windows Server). edge-node points at an unreachable
+# cloud, i.e. it runs as a box with its WAN down, which must still serve the LAN.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['ai-plan/**', 'docs/**', 'incidents/**', '**/*.md']
+  pull_request:
+    paths-ignore: ['ai-plan/**', 'docs/**', 'incidents/**', '**/*.md']
+  workflow_dispatch:
+    inputs:
+      edge_node_tag:
+        description: 'Backend release tag to test (blank = versions.json pin)'
+        required: false
+      next_tag:
+        description: 'Frontend release tag to test (blank = versions.json pin)'
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: install-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+# Actions pinned to commit SHAs (tag in comment), same policy as the app repos.
+jobs:
+  install:
+    name: Install, verify, update, uninstall
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      # The scripts (install.ps1 step 5, the Caddyfile storage root) assume this path.
+      LAGUNA_ROOT: C:\laguna-edge
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # The runner image ships a PostgreSQL service and IIS (HTTP.sys holds :80 as PID 4,
+      # "System"); stop both so nothing holds the ports the appliance binds (5432 Postgres,
+      # 8080 edge-node, 3000 Next, 80/443 Caddy).
+      - name: Free the appliance ports
+        run: |
+          Get-Service postgresql*, W3SVC, WAS -ErrorAction SilentlyContinue |
+            Stop-Service -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          $busy = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+            Where-Object LocalPort -in 5432, 8080, 3000, 80, 443
+          if ($busy) {
+            $busy | Format-Table LocalAddress, LocalPort, OwningProcess | Out-String | Write-Host
+            netsh http show servicestate view=requestq | Out-String | Write-Host
+            throw 'appliance ports are in use'
+          }
+
+      - name: Stage the install root at C:\laguna-edge
+        run: |
+          robocopy $env:GITHUB_WORKSPACE $env:LAGUNA_ROOT /E /XD .git /NFL /NDL /NJH /NJS /NP
+          if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE)" }
+          exit 0
+
+      - name: Apply tag overrides (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          EDGE_NODE_TAG: ${{ inputs.edge_node_tag }}
+          NEXT_TAG: ${{ inputs.next_tag }}
+        run: |
+          $f = Join-Path $env:LAGUNA_ROOT 'versions.json'
+          $v = Get-Content $f -Raw | ConvertFrom-Json
+          if ($env:EDGE_NODE_TAG) { $v.artifacts.'edge-node'.version = $env:EDGE_NODE_TAG }
+          if ($env:NEXT_TAG)      { $v.artifacts.next.version        = $env:NEXT_TAG }
+          $v | ConvertTo-Json -Depth 10 | Set-Content $f -Encoding utf8
+          "edge-node = $($v.artifacts.'edge-node'.version)   next = $($v.artifacts.next.version)"
+
+      # Per-box config, the way a technician would write it. edge-node.env is generated FROM
+      # env\edge-node.env.example so a key the backend starts requiring but the template
+      # lacks (or a stale name) fails here instead of on a real box.
+      - name: Write per-box config
+        run: |
+          $root = $env:LAGUNA_ROOT
+          $ip = (Get-NetIPAddress -AddressFamily IPv4 |
+                  Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
+                  Select-Object -First 1).IPAddress
+          if (-not $ip) { throw 'no usable IPv4 address on the runner' }
+          # /32: only this machine is "the LAN", which is also where the checks run from.
+          @("LAGUNA_LAN_IP=$ip", "LAGUNA_LAN_CIDR=$ip/32", 'LAGUNA_LAN_HOST=pos.laguna.lan') |
+            Set-Content "$root\env\box.env" -Encoding ascii
+
+          $dbPassword = [guid]::NewGuid().ToString('N')
+          "DB_PASSWORD=$dbPassword" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          $set = [ordered]@{
+            PORT = '8080'; APP_MODE = 'edge'
+            DB_HOST = '127.0.0.1'; DB_PORT = '5432'; DB_USER = 'laguna'; DB_PASSWORD = $dbPassword
+            DB_NAME = 'laguna_escondida'; DB_SSLMODE = 'disable'
+            ORGANIZATION_ID = '00000000-0000-0000-0000-00000000c1c1'
+            JWT_SECRET = [guid]::NewGuid().ToString('N'); ADMIN_API_KEY = [guid]::NewGuid().ToString('N')
+            # Unreachable cloud = a box whose WAN is down: sync fails and queues, the LAN works.
+            CLOUD_SYNC_URL = 'http://127.0.0.1:9'; NODE_SYNC_KEY = 'ci-smoke-test'
+            STORAGE_BUCKET = 'ci-smoke-test'; STORAGE_ACCESS_KEY = 'ci'; STORAGE_SECRET = 'ci'
+            ELECTRONIC_INVOICE_URL = 'http://127.0.0.1:9'
+            ELECTRONIC_INVOICE_USER = 'ci'; ELECTRONIC_INVOICE_PASSWORD = 'ci'
+            PRINTER_TRANSPORT = 'file'; PRINTER_TARGET = "$root\logs\printer.out"
+            OBSERVABILITY_ENABLED = 'false'
+          }
+          $required = @(); $out = @(); $seen = @{}
+          foreach ($line in Get-Content "$root\env\edge-node.env.example") {
+            if ($line -match '^\s*([A-Z0-9_]+)=') {
+              $k = $Matches[1]; $seen[$k] = $true
+              if ($line -match '\(required\)') { $required += $k }
+              if ($set.Contains($k)) { $out += "$k=$($set[$k])"; continue }
+            }
+            $out += $line
+          }
+          foreach ($k in $set.Keys) { if (-not $seen[$k]) { $out += "$k=$($set[$k])" } }
+          $out | Set-Content "$root\env\edge-node.env" -Encoding ascii
+
+          $missing = @($required | Where-Object { -not $set[$_] })
+          if ($missing) { throw "edge-node.env.example marks these required but the smoke test sets no value: $($missing -join ', ')" }
+          if (Select-String -Path "$root\env\edge-node.env" -Pattern 'CHANGE_ME' -Quiet) { throw 'CHANGE_ME left in edge-node.env' }
+          "box: $ip (pos.laguna.lan)"
+
+      - name: Fetch artifacts (infra + verified app releases)
+        run: '& "$env:LAGUNA_ROOT\scripts\fetch-artifacts.ps1" -Only caddy,node,postgres,edge-node,next'
+
+      - name: Initialize Postgres
+        run: '& "$env:LAGUNA_ROOT\scripts\init-postgres.ps1" -DbPassword $env:DB_PASSWORD'
+
+      - name: Install
+        run: '& "$env:LAGUNA_ROOT\scripts\install.ps1"'
+
+      - name: Verify
+        run: '& "$env:LAGUNA_ROOT\scripts\verify-install.ps1" -TimeoutSeconds 300'
+
+      - name: Re-run install (must be idempotent)
+        run: |
+          & "$env:LAGUNA_ROOT\scripts\install.ps1"
+          & "$env:LAGUNA_ROOT\scripts\verify-install.ps1"
+
+      - name: Update next and edge-node (swap in place)
+        run: |
+          & "$env:LAGUNA_ROOT\scripts\update.ps1" -Service next
+          & "$env:LAGUNA_ROOT\scripts\update.ps1" -Service edge-node
+          & "$env:LAGUNA_ROOT\scripts\verify-install.ps1"
+
+      - name: Uninstall
+        run: |
+          & "$env:LAGUNA_ROOT\scripts\uninstall.ps1"
+          $left = @(Get-Service laguna-* -ErrorAction SilentlyContinue)
+          if ($left) { throw "services still registered: $($left.Name -join ', ')" }
+          if (Get-NetFirewallRule -DisplayName 'Laguna POS - Caddy (LAN tablets)' -ErrorAction SilentlyContinue) {
+            throw 'firewall rule still present'
+          }
+          'clean'
+
+      - name: Show service logs
+        if: failure()
+        run: |
+          Get-ChildItem "$env:LAGUNA_ROOT\logs" -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "::group::$($_.Name)"
+            Get-Content $_.FullName -Tail 80
+            Write-Host '::endgroup::'
+          }
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: appliance-logs
+          path: C:\laguna-edge\logs
+          if-no-files-found: ignore
+          retention-days: 7

@@ -94,19 +94,49 @@ This does NOT create the Postgres data dir — step 5 does that.
 
 ---
 
-## 4. Build the two app artifacts (on this box, at this path)
+## 4. Install the two app artifacts (downloaded, not built)
+
+`fetch-artifacts.ps1` (step 3) also downloads the app builds: the GitHub Release of each app
+repo pinned in `versions.json` (`artifacts.edge-node.version`, `artifacts.next.version` are
+release **tags**), each checked against its `.sha256` and refused on mismatch.
 
 ```powershell
 cd C:\laguna-edge
-.\scripts\build-artifacts.ps1
-# If the app repos are elsewhere:
-# .\scripts\build-artifacts.ps1 -BackendRepo C:\src\laguna-escondida-backend `
-#                               -FrontendRepo C:\src\laguna-escondida-frontend
+.\scripts\fetch-artifacts.ps1 -Only edge-node,next
+# -> artifacts\edge-node\edge-node.exe, artifacts\next\server.js  (+ RELEASE = installed tag)
 ```
 
-Produces `artifacts\edge-node\edge-node.exe` and `artifacts\next\server.js` (+ static assets,
-real `node_modules`). The frontend's API URL is baked to `http://127.0.0.1:8080/api`. The built
-git SHAs are stamped back into `versions.json` for traceability.
+No Go, pnpm, git or app source is needed on the box. The frontend's API URL is baked to
+`http://127.0.0.1:8080/api` and the order-action PIN to `1234` by the frontend's release
+workflow.
+
+Developer fallback for **unreleased** code (needs Go + pnpm + Developer Mode, and must be run at
+the final install path): `.\scripts\build-artifacts.ps1`. A local build records
+`local-<sha>` in `artifacts\<app>\RELEASE`, so the next `fetch-artifacts.ps1` replaces it
+with the pinned release.
+
+### Cutting a release (developer)
+
+1. Tag the app repo: `git tag v1.2.0 && git push origin v1.2.0`.
+   - backend: CI pushes the cloud image to ECR **and** attaches
+     `edge-node-windows-amd64-v1.2.0.zip` (+ `.sha256`) to the GitHub Release.
+   - frontend: CI attaches `next-standalone-windows-v1.2.0.zip` (+ `.sha256`), after a
+     relocated smoke test.
+2. Deploy the cloud first: point `aws-infra/image-tags.json` `laguna` at the backend tag and
+   `cdk deploy bryan-dev-services`.
+3. Cut the edge release from your machine (git, gh, jq):
+   ```bash
+   scripts/release.sh --dry-run   # resolve + check only
+   scripts/release.sh             # latest app releases with a Windows asset, bump patch
+   scripts/release.sh --backend v1.2.0 --frontend v1.0.3 --version v1.1.0
+   ```
+   It refuses a backend newer than the cloud's `image-tags.json` pin and an app tag whose
+   release has no Windows asset (failed CI). Then it pins `versions.json`, commits, tags this
+   repo, and publishes a GitHub Release with `edge-vX.Y.Z.zip` (tracked files only, never
+   `env/` or `certs/`) and a `manifest.json` (every component's tag, URL and sha256).
+4. On each box: `git pull` then `.\scripts\update.ps1 -Service edge-node` (or `next`).
+   `update.ps1` downloads and verifies *before* stopping the service; `GET /api/edge/status`
+   reports the running backend tag in `version`.
 
 ---
 
@@ -140,7 +170,7 @@ Fill every `CHANGE_ME` / `(required)` value. **Critical:** `DB_PASSWORD` must eq
 - `DB_PASSWORD` — must match step 5.
 - `ORGANIZATION_ID`, `JWT_SECRET`, `ADMIN_API_KEY` — required, the box won't start without them.
 - `CLOUD_SYNC_URL` + `NODE_SYNC_KEY` — set to enable cloud sync; leave blank for local-only.
-- `SPACES_*`, `ELECTRONIC_INVOICE_*` — required for storage + invoicing features.
+- `STORAGE_*`, `ELECTRONIC_INVOICE_*` — required for storage + invoicing features.
 - `PRINTER_TRANSPORT=windows`, `PRINTER_TARGET=<exact Windows printer name>`.
 
 > `env\edge-node.env` is **gitignored** and holds real secrets. Never commit it. `install.ps1`

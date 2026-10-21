@@ -1,11 +1,5 @@
-// =============================================================================
-// Laguna Escondida edge -- telemetry sidecar (Grafana Alloy)
-// =============================================================================
-//
-// The box is offline for long stretches and has a small disk, so the app never
-// talks to Grafana Cloud directly. It emits to THIS process on localhost, which
-// buffers to disk within a hard cap and forwards when there is a connection.
-// The app therefore never blocks on telemetry, and holds no cloud credentials.
+// Telemetry sidecar. The app emits to localhost; this buffers to a capped disk queue
+// and forwards to the cloud relay when online, so the app never blocks on telemetry.
 //
 //   edge-node (Go)  --OTLP/gRPC 4317--> [receiver] --> [filter] -----\
 //                   --OTLP/HTTP  4318-->                              \
@@ -15,39 +9,27 @@
 //                                                            |
 //                                      https://<cloud>/api/telemetry  (X-Node-Key)
 //
-// Everything is configured through environment variables set per box by
-// scripts\install.ps1 from env\alloy.env -- see env\alloy.env.example for the
-// full list and the defaults below for what happens when one is unset.
+// Configured by env vars from env\alloy.env (see env\alloy.env.example).
+// The disk buffer is public-preview, so --stability.level=public-preview is required.
 //
-// Validate after editing:
 //   artifacts\alloy\alloy.exe validate --stability.level=public-preview alloy\config.alloy
-//
-// NOTE: otelcol.storage.file (the disk buffer) is public-preview, which is why
-// the service runs with --stability.level=public-preview. Without that flag
-// Alloy refuses to start, so do not drop it from services\alloy.xml.
 
 logging {
-	// Alloy's OWN logs stay on the box (WinSW captures stdout). They are not
-	// forwarded: a cloud outage would otherwise make Alloy log about failing to
-	// ship logs, and buffer that.
+	// Kept local: forwarding them would buffer logs about failing to ship logs.
 	level  = coalesce(sys.env("LAGUNA_ALLOY_LOG_LEVEL"), "warn")
 	format = "logfmt"
 }
 
 // --- Credentials -------------------------------------------------------------
 
-// The node key is read from a file rather than an environment variable so it is
-// not readable from every other process's environment on the box, and never
-// lands in a committed service XML. install.ps1 writes it from env\alloy.env and
-// locks it down with icacls.
+// A locked-down file, not an env var, so other processes can't read it.
 local.file "node_key" {
 	filename  = coalesce(sys.env("LAGUNA_NODE_KEY_FILE"), "C:\\laguna-edge\\env\\alloy-node-key")
 	is_secret = true
 }
 
 otelcol.auth.headers "cloud" {
-	// Same credential the data-sync path uses; the cloud ingest matches it against
-	// its NODE_SYNC_KEY and only then relays to Grafana Cloud.
+	// Same key as the data-sync path (NODE_SYNC_KEY).
 	header {
 		key   = "X-Node-Key"
 		value = local.file.node_key.content
@@ -57,9 +39,6 @@ otelcol.auth.headers "cloud" {
 // --- Ingress: the app's logs and traces ---------------------------------------
 
 otelcol.receiver.otlp "edge" {
-	// localhost only. Nothing but the app may reach these ports, and the hop is
-	// always up even when the box is offline -- that is what keeps the POS from
-	// ever blocking on telemetry.
 	grpc {
 		endpoint = coalesce(sys.env("LAGUNA_OTLP_GRPC_ADDRESS"), "127.0.0.1:4317")
 	}
@@ -74,9 +53,7 @@ otelcol.receiver.otlp "edge" {
 	}
 }
 
-// Volume lever: drop anything below the configured severity before it can reach
-// the disk buffer. Records with no severity set are kept -- an unlabelled log is
-// more likely a gap in instrumentation than noise worth discarding.
+// Drop logs below the minimum severity. Records without a severity are kept.
 otelcol.processor.filter "log_severity" {
 	error_mode = "ignore"
 
@@ -105,17 +82,14 @@ prometheus.scrape "edge_node" {
 	forward_to     = [otelcol.receiver.prometheus.edge_node.receiver]
 }
 
-// One protocol edge->cloud: scraped Prometheus metrics become OTLP so logs,
-// traces, and metrics share a single authenticated channel and a single buffer.
+// Converted to OTLP so all signals share one channel and one buffer.
 otelcol.receiver.prometheus "edge_node" {
 	output {
 		metrics = [otelcol.processor.transform.metric_identity.input]
 	}
 }
 
-// Metrics are collected here, not emitted by the app, so their identity is
-// stamped here -- with the same values and the same attribute names the app puts
-// on its own OTel resource, so a node id filter returns all three signal types.
+// Same identity attributes the app puts on its logs and traces.
 otelcol.processor.transform "metric_identity" {
 	error_mode = "ignore"
 
@@ -140,8 +114,6 @@ otelcol.processor.transform "metric_identity" {
 // --- Egress -------------------------------------------------------------------
 
 otelcol.processor.batch "cloud" {
-	// Batch on a long timeout: on a box that is mostly idle this trades a little
-	// freshness for far fewer round trips and far fewer buffer entries.
 	timeout             = coalesce(sys.env("LAGUNA_BATCH_TIMEOUT"), "10s")
 	send_batch_size     = 2048
 	send_batch_max_size = 4096
@@ -153,14 +125,11 @@ otelcol.processor.batch "cloud" {
 	}
 }
 
-// The disk buffer. bbolt file under LAGUNA_TELEMETRY_BUFFER_DIR; survives an
-// Alloy restart, so a service restart mid-outage does not lose the backlog.
+// Survives restarts, so a restart mid-outage keeps the backlog.
 otelcol.storage.file "buffer" {
 	directory        = coalesce(sys.env("LAGUNA_TELEMETRY_BUFFER_DIR"), "C:\\laguna-edge\\alloy-data\\buffer")
 	create_directory = true
 
-	// Reclaim space as the backlog drains, instead of leaving the file at its
-	// high-water mark until the service restarts.
 	compaction {
 		on_start                      = true
 		on_rebound                    = true
@@ -172,8 +141,7 @@ otelcol.storage.file "buffer" {
 
 otelcol.exporter.otlphttp "cloud" {
 	client {
-		// The cloud relay, NOT Grafana Cloud. Base URL only -- the exporter appends
-		// /v1/logs, /v1/traces, /v1/metrics, which is exactly how the ingest routes.
+		// The cloud relay's base URL; the exporter appends /v1/<signal>.
 		endpoint    = sys.env("LAGUNA_TELEMETRY_INGEST_URL")
 		auth        = otelcol.auth.headers.cloud.handler
 		compression = "gzip"
@@ -184,15 +152,8 @@ otelcol.exporter.otlphttp "cloud" {
 		enabled = true
 		storage = otelcol.storage.file.buffer.handler
 
-		// Hard cap in BYTES, not in batches: the point of the cap is the box's disk.
-		//
-		// Budget disk as ~6x this number. The cap applies PER SIGNAL (one bbolt file
-		// each for logs, traces, metrics) and bbolt allocates in doublings, so a 32 MiB
-		// cap was measured holding a ~64 MiB file per signal.
-		//
-		// When full, Alloy REJECTS new telemetry and keeps what is already queued --
-		// its persistent queue has no drop-oldest mode. A cap-filling outage therefore
-		// keeps its beginning and loses its tail.
+		// Per signal, and bbolt doubles allocations: budget ~6x this on disk.
+		// When full, new telemetry is rejected (no drop-oldest mode).
 		sizer         = "bytes"
 		queue_size    = coalesce(sys.env("LAGUNA_TELEMETRY_BUFFER_BYTES"), 33554432)
 		num_consumers = 1
@@ -202,9 +163,7 @@ otelcol.exporter.otlphttp "cloud" {
 		enabled          = true
 		initial_interval = "5s"
 		max_interval     = "5m"
-		// Age-out: a batch that has been failing for longer than this is dropped so
-		// the head of the queue cannot wedge behind one bad export. Set well above a
-		// realistic outage so a normal offline period is delivered in full.
+		// Drops a batch stuck this long so it can't wedge the queue. Keep it above a normal outage.
 		max_elapsed_time = coalesce(sys.env("LAGUNA_TELEMETRY_MAX_RETRY_AGE"), "24h")
 	}
 }
