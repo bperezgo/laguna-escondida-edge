@@ -142,7 +142,8 @@ with the pinned release.
 
 ## 5. Initialize the Postgres cluster
 
-Creates the data dir, the `laguna` app role, and the `laguna_escondida` database. **Does not
+Creates the data dir, the `laguna` app role, the `pos_app` group role the migrations grant to
+(`create-db-roles.ps1`), and the `laguna_escondida` database. **Does not
 need admin** (runs as you). **Remember the password you choose — it must match `.env` in step 6.**
 
 ```powershell

@@ -93,6 +93,11 @@ Then by service:
     -c "ALTER ROLE laguna PASSWORD 'new-pw';"
   Remove-Item Env:\PGPASSWORD   # then set DB_PASSWORD=new-pw in env and update the service
   ```
+- **`role pos_app does not exist`, or `permission denied to create role` and then
+  `schema version 65 is dirty`** → edge-node v1.2.0+ migrations grant to the `pos_app` role,
+  which only the superuser can create. Run `.\scripts\create-db-roles.ps1 -SuperPassword '<superuser-pw>'`
+  once, then update again. A POS update rolls back and restores the database by itself. If the
+  schema was left dirty without a restore, restore the newest `backups\pre-update-*.dump` first.
 - **`.env` not found** → `install.ps1` copies `env\edge-node.env` → `artifacts\edge-node\.env`.
   Confirm `env\edge-node.env` exists (not just the `.example`) and re-run install/update.
 

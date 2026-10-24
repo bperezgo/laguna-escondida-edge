@@ -61,6 +61,9 @@ On the next minute tick after the click:
 If step 4 or 5 fails, the updater **rolls back**: it stops the app services, restores the
 database from the step 3 dump (the old edge-node refuses a schema migrated past what it knows),
 reinstalls the previous tags from the local cache (works offline) and verifies again.
+The app services are set to Disabled while stopped for the restore, so Windows' restart-on-failure
+can't start a crash-looping edge-node against a half-restored database; they are set back to
+Automatic before the reinstall, and also if the rollback fails.
 Anything written to the database between the backup and the rollback is lost, which is why the
 banner asks for no open orders.
 

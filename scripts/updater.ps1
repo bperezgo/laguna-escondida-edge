@@ -209,16 +209,34 @@ function Restore-Database($file) {
   Log "database restored from $file"
 }
 
+# A crash-looping service shows Stopped between restarts and Windows' failure action starts it
+# again, even mid-restore. Disabling it cancels those restarts; Enable-AppServices undoes it.
 function Stop-AppServices {
   foreach ($name in 'caddy','next','edge-node') {
     $svc = Get-Service "laguna-$name" -ErrorAction SilentlyContinue
-    if (-not $svc -or $svc.Status -eq 'Stopped') { continue }
-    & sc.exe stop "laguna-$name" | Out-Null
-    $svc.WaitForStatus('Stopped', (New-TimeSpan -Seconds 30))
+    if (-not $svc) { continue }
+    Set-Service "laguna-$name" -StartupType Disabled
+    $deadline = (Get-Date).AddSeconds(60)
+    while ($true) {
+      $svc.Refresh()
+      if ($svc.Status -eq 'Stopped') { break }
+      if ((Get-Date) -gt $deadline) { throw "laguna-$name did not stop within 60s" }
+      if ($svc.Status -eq 'Running') { & sc.exe stop "laguna-$name" | Out-Null }
+      Start-Sleep -Seconds 1
+    }
+  }
+}
+
+function Enable-AppServices {
+  foreach ($name in 'caddy','next','edge-node') {
+    if (Get-Service "laguna-$name" -ErrorAction SilentlyContinue) {
+      Set-Service "laguna-$name" -StartupType Automatic
+    }
   }
 }
 
 function Start-AllServices {
+  Enable-AppServices
   foreach ($name in 'postgres','edge-node','next','caddy','alloy') {
     if (Get-Service "laguna-$name" -ErrorAction SilentlyContinue) { Start-Service "laguna-$name" }
   }
@@ -283,6 +301,7 @@ function Invoke-Apply {
     try {
       Stop-AppServices
       if ($dump) { Restore-Database $dump }
+      Enable-AppServices
       foreach ($a in $changed) {
         if ((Get-Installed $a) -ne $from[$a]) { Invoke-Script 'update.ps1' @{ Service = $a; Tag = $from[$a] } }
       }
@@ -290,6 +309,8 @@ function Invoke-Apply {
       Assert-Healthy
       Write-Result 'rolled_back' "Falló en '$failedPhase' ($err). Se restauró $(Format-Tags $from)." $from $from
     } catch {
+      # Left disabled, the services would not come back after a reboot.
+      try { Enable-AppServices } catch { Log "could not re-enable the services: $($_.Exception.Message)" }
       $msg = "Falló en '$failedPhase' ($err) y la restauración también falló: $($_.Exception.Message)."
       if ($dump) { $msg += " Copia de la base de datos: $dump" }
       Write-Result 'rollback_failed' $msg $from (Get-InstalledTags)

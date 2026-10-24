@@ -104,6 +104,9 @@ try {
     & $psql @psqlArgs -c "CREATE DATABASE $DbName OWNER $DbUser" | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Failed to create database '$DbName' (psql exit $LASTEXITCODE)." }
   }
+
+  Step "Creating the roles the migrations grant to"
+  & (Join-Path $PSScriptRoot 'create-db-roles.ps1') -SuperPassword $SuperPassword -Port $Port
 }
 finally {
   Step "Stopping the temporary server"
