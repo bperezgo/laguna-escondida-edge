@@ -5,7 +5,7 @@
     1. every laguna-* service is Running
     2. edge-node answers /api/edge/status in edge mode, running the installed release
     3. Next answers on 127.0.0.1:3000
-    4. Caddy serves HTTPS on LAGUNA_LAN_IP (and LAGUNA_LAN_HOST, if set) with a cert this box
+    4. Caddy serves HTTPS on EDGE_LAN_IP (and EDGE_LAN_HOST, if set) with a cert this box
        trusts, redirects are relative (no localhost:3000 leak), and :80 redirects to https
 
   Exits non-zero on the first failing layer. Used by .github\workflows\install-smoke.yml on a
@@ -61,8 +61,8 @@ foreach ($line in Get-Content (Join-Path $Root 'env\box.env')) {
   $kv = $t -split '=', 2
   if ($kv.Count -eq 2) { $box[$kv[0].Trim()] = $kv[1].Trim() }
 }
-$LanIp   = $box['LAGUNA_LAN_IP']
-$LanHost = if ($box['LAGUNA_LAN_HOST']) { ($box['LAGUNA_LAN_HOST'] -split ',')[0].Trim() } else { $null }
+$LanIp   = $box['EDGE_LAN_IP']
+$LanHost = if ($box['EDGE_LAN_HOST']) { ($box['EDGE_LAN_HOST'] -split ',')[0].Trim() } else { $null }
 $pins    = (Get-Content (Join-Path $Root 'versions.json') -Raw | ConvertFrom-Json).artifacts
 
 # --- 1. services --------------------------------------------------------------------

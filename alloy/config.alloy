@@ -16,7 +16,7 @@
 
 logging {
 	// Kept local: forwarding them would buffer logs about failing to ship logs.
-	level  = coalesce(sys.env("LAGUNA_ALLOY_LOG_LEVEL"), "warn")
+	level  = coalesce(sys.env("EDGE_ALLOY_LOG_LEVEL"), "warn")
 	format = "logfmt"
 }
 
@@ -24,7 +24,7 @@ logging {
 
 // A locked-down file, not an env var, so other processes can't read it.
 local.file "node_key" {
-	filename  = coalesce(sys.env("LAGUNA_NODE_KEY_FILE"), "C:\\laguna-edge\\env\\alloy-node-key")
+	filename  = coalesce(sys.env("EDGE_NODE_KEY_FILE"), "C:\\laguna-edge\\env\\alloy-node-key")
 	is_secret = true
 }
 
@@ -40,11 +40,11 @@ otelcol.auth.headers "cloud" {
 
 otelcol.receiver.otlp "edge" {
 	grpc {
-		endpoint = coalesce(sys.env("LAGUNA_OTLP_GRPC_ADDRESS"), "127.0.0.1:4317")
+		endpoint = coalesce(sys.env("EDGE_OTLP_GRPC_ADDRESS"), "127.0.0.1:4317")
 	}
 
 	http {
-		endpoint = coalesce(sys.env("LAGUNA_OTLP_HTTP_ADDRESS"), "127.0.0.1:4318")
+		endpoint = coalesce(sys.env("EDGE_OTLP_HTTP_ADDRESS"), "127.0.0.1:4318")
 	}
 
 	output {
@@ -59,7 +59,7 @@ otelcol.processor.filter "log_severity" {
 
 	logs {
 		log_record = [
-			"severity_number != SEVERITY_NUMBER_UNSPECIFIED and severity_number < SEVERITY_NUMBER_" + coalesce(sys.env("LAGUNA_MIN_LOG_SEVERITY"), "INFO"),
+			"severity_number != SEVERITY_NUMBER_UNSPECIFIED and severity_number < SEVERITY_NUMBER_" + coalesce(sys.env("EDGE_MIN_LOG_SEVERITY"), "INFO"),
 		]
 	}
 
@@ -72,13 +72,13 @@ otelcol.processor.filter "log_severity" {
 
 prometheus.scrape "edge_node" {
 	targets = [{
-		__address__ = coalesce(sys.env("LAGUNA_METRICS_ADDRESS"), "127.0.0.1:9090"),
+		__address__ = coalesce(sys.env("EDGE_METRICS_ADDRESS"), "127.0.0.1:9090"),
 	}]
 
-	job_name        = coalesce(sys.env("LAGUNA_SERVICE_NAME"), "laguna-backend")
+	job_name        = coalesce(sys.env("EDGE_SERVICE_NAME"), "laguna-backend")
 	metrics_path    = "/metrics"
-	scrape_interval = coalesce(sys.env("LAGUNA_METRICS_SCRAPE_INTERVAL"), "60s")
-	scrape_timeout = coalesce(sys.env("LAGUNA_METRICS_SCRAPE_TIMEOUT"), "10s")
+	scrape_interval = coalesce(sys.env("EDGE_METRICS_SCRAPE_INTERVAL"), "60s")
+	scrape_timeout = coalesce(sys.env("EDGE_METRICS_SCRAPE_TIMEOUT"), "10s")
 	forward_to     = [otelcol.receiver.prometheus.edge_node.receiver]
 }
 
@@ -97,12 +97,12 @@ otelcol.processor.transform "metric_identity" {
 		context = "resource"
 
 		statements = [
-			`set(attributes["service.name"], "` + coalesce(sys.env("LAGUNA_SERVICE_NAME"), "laguna-backend") + `")`,
-			`set(attributes["service.instance.id"], "` + sys.env("LAGUNA_NODE_ID") + `")`,
-			`set(attributes["node.id"], "` + sys.env("LAGUNA_NODE_ID") + `")`,
-			`set(attributes["organization.id"], "` + sys.env("LAGUNA_ORGANIZATION_ID") + `")`,
-			`set(attributes["deployment.mode"], "` + coalesce(sys.env("LAGUNA_DEPLOYMENT_MODE"), "edge") + `")`,
-			`set(attributes["deployment.environment.name"], "` + coalesce(sys.env("LAGUNA_ENVIRONMENT"), "production") + `")`,
+			`set(attributes["service.name"], "` + coalesce(sys.env("EDGE_SERVICE_NAME"), "laguna-backend") + `")`,
+			`set(attributes["service.instance.id"], "` + sys.env("EDGE_NODE_ID") + `")`,
+			`set(attributes["node.id"], "` + sys.env("EDGE_NODE_ID") + `")`,
+			`set(attributes["organization.id"], "` + sys.env("EDGE_ORGANIZATION_ID") + `")`,
+			`set(attributes["deployment.mode"], "` + coalesce(sys.env("EDGE_DEPLOYMENT_MODE"), "edge") + `")`,
+			`set(attributes["deployment.environment.name"], "` + coalesce(sys.env("EDGE_ENVIRONMENT"), "production") + `")`,
 		]
 	}
 
@@ -114,7 +114,7 @@ otelcol.processor.transform "metric_identity" {
 // --- Egress -------------------------------------------------------------------
 
 otelcol.processor.batch "cloud" {
-	timeout             = coalesce(sys.env("LAGUNA_BATCH_TIMEOUT"), "10s")
+	timeout             = coalesce(sys.env("EDGE_BATCH_TIMEOUT"), "10s")
 	send_batch_size     = 2048
 	send_batch_max_size = 4096
 
@@ -127,13 +127,13 @@ otelcol.processor.batch "cloud" {
 
 // Survives restarts, so a restart mid-outage keeps the backlog.
 otelcol.storage.file "buffer" {
-	directory        = coalesce(sys.env("LAGUNA_TELEMETRY_BUFFER_DIR"), "C:\\laguna-edge\\alloy-data\\buffer")
+	directory        = coalesce(sys.env("EDGE_TELEMETRY_BUFFER_DIR"), "C:\\laguna-edge\\alloy-data\\buffer")
 	create_directory = true
 
 	compaction {
 		on_start                      = true
 		on_rebound                    = true
-		directory                     = coalesce(sys.env("LAGUNA_TELEMETRY_BUFFER_DIR"), "C:\\laguna-edge\\alloy-data\\buffer")
+		directory                     = coalesce(sys.env("EDGE_TELEMETRY_BUFFER_DIR"), "C:\\laguna-edge\\alloy-data\\buffer")
 		rebound_needed_threshold_mib  = 16
 		rebound_trigger_threshold_mib = 8
 	}
@@ -142,7 +142,7 @@ otelcol.storage.file "buffer" {
 otelcol.exporter.otlphttp "cloud" {
 	client {
 		// The cloud relay's base URL; the exporter appends /v1/<signal>.
-		endpoint    = sys.env("LAGUNA_TELEMETRY_INGEST_URL")
+		endpoint    = sys.env("EDGE_TELEMETRY_INGEST_URL")
 		auth        = otelcol.auth.headers.cloud.handler
 		compression = "gzip"
 		timeout     = "30s"
@@ -155,7 +155,7 @@ otelcol.exporter.otlphttp "cloud" {
 		// Per signal, and bbolt doubles allocations: budget ~6x this on disk.
 		// When full, new telemetry is rejected (no drop-oldest mode).
 		sizer         = "bytes"
-		queue_size    = coalesce(sys.env("LAGUNA_TELEMETRY_BUFFER_BYTES"), 33554432)
+		queue_size    = coalesce(sys.env("EDGE_TELEMETRY_BUFFER_BYTES"), 33554432)
 		num_consumers = 1
 	}
 
@@ -164,6 +164,6 @@ otelcol.exporter.otlphttp "cloud" {
 		initial_interval = "5s"
 		max_interval     = "5m"
 		// Drops a batch stuck this long so it can't wedge the queue. Keep it above a normal outage.
-		max_elapsed_time = coalesce(sys.env("LAGUNA_TELEMETRY_MAX_RETRY_AGE"), "24h")
+		max_elapsed_time = coalesce(sys.env("EDGE_TELEMETRY_MAX_RETRY_AGE"), "24h")
 	}
 }

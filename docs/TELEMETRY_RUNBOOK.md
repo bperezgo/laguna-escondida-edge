@@ -83,10 +83,10 @@ Four values must be right; the rest have working defaults:
 
 | Setting | Must be |
 |---|---|
-| `LAGUNA_TELEMETRY_INGEST_URL` | The cloud backend's `/api/telemetry` base URL. **No** `/v1/logs` suffix — the exporter appends it. |
-| `LAGUNA_NODE_KEY` | Identical to `NODE_SYNC_KEY` in `env\edge-node.env` |
-| `LAGUNA_NODE_ID` | Identical to `NODE_ID` in `env\edge-node.env` |
-| `LAGUNA_ORGANIZATION_ID` | Identical to `ORGANIZATION_ID` in `env\edge-node.env` |
+| `EDGE_TELEMETRY_INGEST_URL` | The cloud backend's `/api/telemetry` base URL. **No** `/v1/logs` suffix — the exporter appends it. |
+| `EDGE_NODE_KEY` | Identical to `NODE_SYNC_KEY` in `env\edge-node.env` |
+| `EDGE_NODE_ID` | Identical to `NODE_ID` in `env\edge-node.env` |
+| `EDGE_ORGANIZATION_ID` | Identical to `ORGANIZATION_ID` in `env\edge-node.env` |
 
 `install.ps1` checks all four against `edge-node.env` and **refuses to install** if any
 disagree, so a mismatch fails loudly at install time instead of quietly splitting one box
@@ -149,15 +149,15 @@ time, so editing the file alone changes nothing.
 | Knob | Where | Default | What it buys |
 |---|---|---|---|
 | `OTEL_TRACES_SAMPLER_ARG` | `env\edge-node.env` | `0.1` | Fraction of traces kept. The biggest volume lever. Keep below `1.0`. |
-| `LAGUNA_MIN_LOG_SEVERITY` | `env\alloy.env` | `INFO` | Lowest severity forwarded. `DEBUG`/`TRACE` are dropped at the sidecar and never reach the buffer or the bill. |
-| `LAGUNA_TELEMETRY_BUFFER_BYTES` | `env\alloy.env` | `33554432` (32 MiB) | How much telemetry survives an outage. **See the disk note below.** |
-| `LAGUNA_TELEMETRY_MAX_RETRY_AGE` | `env\alloy.env` | `24h` | How long a failing batch is retried before being dropped. Set above your worst realistic outage. |
-| `LAGUNA_METRICS_SCRAPE_INTERVAL` | `env\alloy.env` | `60s` | Metric resolution vs. volume. If you lower it, lower `LAGUNA_METRICS_SCRAPE_TIMEOUT` too — Alloy **refuses to start** if the timeout is not below the interval. |
-| `LAGUNA_ALLOY_LOG_LEVEL` | `env\alloy.env` | `warn` | Alloy's own chatter in `logs\alloy.*.log`. Raise to `info` while debugging, put it back after. |
+| `EDGE_MIN_LOG_SEVERITY` | `env\alloy.env` | `INFO` | Lowest severity forwarded. `DEBUG`/`TRACE` are dropped at the sidecar and never reach the buffer or the bill. |
+| `EDGE_TELEMETRY_BUFFER_BYTES` | `env\alloy.env` | `33554432` (32 MiB) | How much telemetry survives an outage. **See the disk note below.** |
+| `EDGE_TELEMETRY_MAX_RETRY_AGE` | `env\alloy.env` | `24h` | How long a failing batch is retried before being dropped. Set above your worst realistic outage. |
+| `EDGE_METRICS_SCRAPE_INTERVAL` | `env\alloy.env` | `60s` | Metric resolution vs. volume. If you lower it, lower `EDGE_METRICS_SCRAPE_TIMEOUT` too — Alloy **refuses to start** if the timeout is not below the interval. |
+| `EDGE_ALLOY_LOG_LEVEL` | `env\alloy.env` | `warn` | Alloy's own chatter in `logs\alloy.*.log`. Raise to `info` while debugging, put it back after. |
 
 ### Budget ~6× the buffer cap in disk
 
-`LAGUNA_TELEMETRY_BUFFER_BYTES` is applied **per signal** — there are three buffer files
+`EDGE_TELEMETRY_BUFFER_BYTES` is applied **per signal** — there are three buffer files
 (logs, traces, metrics) — and each file allocates in doublings, so a 32 MiB cap was measured
 holding a ~64 MiB file. Worst case for the default is therefore **~192 MiB**, not 32 MiB.
 Size the cap against free space on `C:` with that multiplier in mind.
@@ -190,13 +190,13 @@ Nothing depends on the sidecar service, so it also cannot hold up a boot.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `laguna-alloy` won't start; `alloy.err.log` names a public-preview component | The `stability.level` flag was removed from `services\alloy.xml` | Restore it — the disk buffer needs it. Re-run `install.ps1`. |
-| Service starts, nothing in Grafana, ingest returns **401/403** | Node key mismatch, or a stray newline in `env\alloy-node-key` | Confirm `LAGUNA_NODE_KEY` == `NODE_SYNC_KEY`, then re-run `install.ps1` (it rewrites the key file with no BOM and no trailing newline). |
-| Logs and traces arrive, **metrics don't** | The `/metrics` scrape is failing | `curl.exe http://127.0.0.1:9090/metrics` — if empty, check `METRICS_PORT` in `env\edge-node.env` matches `LAGUNA_METRICS_ADDRESS`. |
-| Metrics arrive but under a **different node** than the logs | `LAGUNA_NODE_ID` ≠ the app's `NODE_ID` | Make them equal and re-run `install.ps1`. (A fresh install can't hit this — the preflight blocks it.) |
+| Service starts, nothing in Grafana, ingest returns **401/403** | Node key mismatch, or a stray newline in `env\alloy-node-key` | Confirm `EDGE_NODE_KEY` == `NODE_SYNC_KEY`, then re-run `install.ps1` (it rewrites the key file with no BOM and no trailing newline). |
+| Logs and traces arrive, **metrics don't** | The `/metrics` scrape is failing | `curl.exe http://127.0.0.1:9090/metrics` — if empty, check `METRICS_PORT` in `env\edge-node.env` matches `EDGE_METRICS_ADDRESS`. |
+| Metrics arrive but under a **different node** than the logs | `EDGE_NODE_ID` ≠ the app's `NODE_ID` | Make them equal and re-run `install.ps1`. (A fresh install can't hit this — the preflight blocks it.) |
 | `alloy.err.log` repeats `Exporting failed. Will retry` | The box is offline, or the ingest is down | Nothing to do. This is the buffer working; it drains on reconnect. |
 | Nothing at all in Grafana, no errors anywhere | The app isn't exporting | Check `OBSERVABILITY_ENABLED=true` **and** `OTEL_EXPORTER_OTLP_ENDPOINT` are set in `env\edge-node.env`, then `update.ps1 -Service edge-node`. |
 | Right data, **wrong time window** | Clock drift | §1. `w32tm /resync`. |
-| `alloy-data\` much bigger than expected | The ~6× multiplier above | Lower `LAGUNA_TELEMETRY_BUFFER_BYTES`, re-run `install.ps1`, restart the service. |
+| `alloy-data\` much bigger than expected | The ~6× multiplier above | Lower `EDGE_TELEMETRY_BUFFER_BYTES`, re-run `install.ps1`, restart the service. |
 
 Useful one-liners:
 

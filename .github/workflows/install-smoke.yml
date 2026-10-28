@@ -41,7 +41,7 @@ jobs:
         shell: pwsh
     env:
       # The scripts (install.ps1 step 5, the Caddyfile storage root) assume this path.
-      LAGUNA_ROOT: C:\laguna-edge
+      EDGE_ROOT: C:\laguna-edge
     steps:
       - name: Checkout code
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -64,7 +64,7 @@ jobs:
 
       - name: Stage the install root at C:\laguna-edge
         run: |
-          robocopy $env:GITHUB_WORKSPACE $env:LAGUNA_ROOT /E /XD .git /NFL /NDL /NJH /NJS /NP
+          robocopy $env:GITHUB_WORKSPACE $env:EDGE_ROOT /E /XD .git /NFL /NDL /NJH /NJS /NP
           if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE)" }
           exit 0
 
@@ -74,7 +74,7 @@ jobs:
           EDGE_NODE_TAG: ${{ inputs.edge_node_tag }}
           NEXT_TAG: ${{ inputs.next_tag }}
         run: |
-          $f = Join-Path $env:LAGUNA_ROOT 'versions.json'
+          $f = Join-Path $env:EDGE_ROOT 'versions.json'
           $v = Get-Content $f -Raw | ConvertFrom-Json
           if ($env:EDGE_NODE_TAG) { $v.artifacts.'edge-node'.version = $env:EDGE_NODE_TAG }
           if ($env:NEXT_TAG)      { $v.artifacts.next.version        = $env:NEXT_TAG }
@@ -86,13 +86,13 @@ jobs:
       # lacks (or a stale name) fails here instead of on a real box.
       - name: Write per-box config
         run: |
-          $root = $env:LAGUNA_ROOT
+          $root = $env:EDGE_ROOT
           $ip = (Get-NetIPAddress -AddressFamily IPv4 |
                   Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
                   Select-Object -First 1).IPAddress
           if (-not $ip) { throw 'no usable IPv4 address on the runner' }
           # /32: only this machine is "the LAN", which is also where the checks run from.
-          @("LAGUNA_LAN_IP=$ip", "LAGUNA_LAN_CIDR=$ip/32", 'LAGUNA_LAN_HOST=pos.laguna.lan') |
+          @("EDGE_LAN_IP=$ip", "EDGE_LAN_CIDR=$ip/32", 'EDGE_LAN_HOST=pos.laguna.lan') |
             Set-Content "$root\env\box.env" -Encoding ascii
 
           $dbPassword = [guid]::NewGuid().ToString('N')
@@ -129,27 +129,27 @@ jobs:
           "box: $ip (pos.laguna.lan)"
 
       - name: Fetch artifacts (infra + verified app releases)
-        run: '& "$env:LAGUNA_ROOT\scripts\fetch-artifacts.ps1" -Only caddy,node,postgres,edge-node,next'
+        run: '& "$env:EDGE_ROOT\scripts\fetch-artifacts.ps1" -Only caddy,node,postgres,edge-node,next'
 
       - name: Initialize Postgres
-        run: '& "$env:LAGUNA_ROOT\scripts\init-postgres.ps1" -DbPassword $env:DB_PASSWORD'
+        run: '& "$env:EDGE_ROOT\scripts\init-postgres.ps1" -DbPassword $env:DB_PASSWORD'
 
       - name: Install
-        run: '& "$env:LAGUNA_ROOT\scripts\install.ps1"'
+        run: '& "$env:EDGE_ROOT\scripts\install.ps1"'
 
       - name: Verify
-        run: '& "$env:LAGUNA_ROOT\scripts\verify-install.ps1" -TimeoutSeconds 300'
+        run: '& "$env:EDGE_ROOT\scripts\verify-install.ps1" -TimeoutSeconds 300'
 
       - name: Re-run install (must be idempotent)
         run: |
-          & "$env:LAGUNA_ROOT\scripts\install.ps1"
-          & "$env:LAGUNA_ROOT\scripts\verify-install.ps1"
+          & "$env:EDGE_ROOT\scripts\install.ps1"
+          & "$env:EDGE_ROOT\scripts\verify-install.ps1"
 
       - name: Update next and edge-node (swap in place)
         run: |
-          & "$env:LAGUNA_ROOT\scripts\update.ps1" -Service next
-          & "$env:LAGUNA_ROOT\scripts\update.ps1" -Service edge-node
-          & "$env:LAGUNA_ROOT\scripts\verify-install.ps1"
+          & "$env:EDGE_ROOT\scripts\update.ps1" -Service next
+          & "$env:EDGE_ROOT\scripts\update.ps1" -Service edge-node
+          & "$env:EDGE_ROOT\scripts\verify-install.ps1"
 
       # What an admin's click does: the request file is picked up by the real scheduled task
       # (as SYSTEM). The 30-min check can't reach the cloud here, so stage the offer by hand.
@@ -157,7 +157,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $root  = $env:LAGUNA_ROOT
+          $root  = $env:EDGE_ROOT
           $state = "$root\state"
           $task = Get-ScheduledTask 'Laguna Updater'
           if ($task.Triggers[0].Repetition.Interval -ne 'PT1M') { throw "task repeats every '$($task.Triggers[0].Repetition.Interval)', expected PT1M" }
@@ -196,7 +196,7 @@ jobs:
 
       - name: Uninstall
         run: |
-          & "$env:LAGUNA_ROOT\scripts\uninstall.ps1"
+          & "$env:EDGE_ROOT\scripts\uninstall.ps1"
           $left = @(Get-Service laguna-* -ErrorAction SilentlyContinue)
           if ($left) { throw "services still registered: $($left.Name -join ', ')" }
           if (Get-NetFirewallRule -DisplayName 'Laguna POS - Caddy (LAN tablets)' -ErrorAction SilentlyContinue) {
@@ -207,7 +207,7 @@ jobs:
       - name: Show service logs
         if: failure()
         run: |
-          Get-ChildItem "$env:LAGUNA_ROOT\logs" -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object {
+          Get-ChildItem "$env:EDGE_ROOT\logs" -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object {
             Write-Host "::group::$($_.Name)"
             Get-Content $_.FullName -Tail 80
             Write-Host '::endgroup::'

@@ -8,9 +8,9 @@
 }
 
 # Both placeholders are machine env vars that scripts\install.ps1 builds from env\box.env.
-#   LAGUNA_SITE_ADDR -> "pos.laguna.lan, 192.168.10.10" or just "192.168.10.10"
-#   LAGUNA_LAN_CIDR  -> e.g. 192.168.10.0/24
-{$LAGUNA_SITE_ADDR} {
+#   EDGE_SITE_ADDR -> "pos.laguna.lan, 192.168.10.10" or just "192.168.10.10"
+#   EDGE_LAN_CIDR  -> e.g. 192.168.10.0/24
+{$EDGE_SITE_ADDR} {
 	tls internal
 
 	# Compressing SSE buffers the frames and the stream stays empty.
@@ -20,7 +20,7 @@
 	encode @notsse zstd gzip
 
 	# Defense in depth; the Windows Firewall rule is the primary control.
-	@notlan not remote_ip {$LAGUNA_LAN_CIDR}
+	@notlan not remote_ip {$EDGE_LAN_CIDR}
 	respond @notlan "Forbidden" 403
 
 	header {

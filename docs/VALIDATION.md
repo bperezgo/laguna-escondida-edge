@@ -11,7 +11,7 @@ on the box.
 > (`.github/workflows/install-smoke.yml`), so most regressions are caught before they reach a box.
 
 > Convention: install root is `C:\laguna-edge`, LAN IP is `192.168.0.123` (this box's
-> `LAGUNA_LAN_IP` from `env\box.env` — the single source of truth; substitute yours). `curl.exe`
+> `EDGE_LAN_IP` from `env\box.env` — the single source of truth; substitute yours). `curl.exe`
 > (not the `curl` alias) is used so flags behave like real curl.
 
 ---
@@ -19,7 +19,7 @@ on the box.
 ## Network identity matches reality (check this FIRST after a reboot)
 
 The box's whole config — Caddy's cert SAN, the firewall rule, the URL tablets hit — is pinned to
-`LAGUNA_LAN_IP` in `env\box.env`. If the box is on **DHCP** and the router hands it a different
+`EDGE_LAN_IP` in `env\box.env`. If the box is on **DHCP** and the router hands it a different
 address after a reboot, every service stays `Running` but the box is unreachable at the old IP.
 This is the #1 cause of "services are up but `https://<ip>` is dead". Check it before anything else:
 
@@ -39,7 +39,7 @@ curl.exe -k -s -o NUL -w "local -> %{http_code}`n" https://127.0.0.1/signin   # 
 - **Actual IP == box.env, `local -> 200`** → identity is fine; move on to §1.
 - **Actual IP != box.env** → that's the problem. Best fix: set a **DHCP reservation / static IP**
   on the router so this box always gets the same address, then reboot. Quick fix: update
-  `LAGUNA_LAN_IP` in `env\box.env` to the new IP and re-run `scripts\install.ps1` (elevated) — but
+  `EDGE_LAN_IP` in `env\box.env` to the new IP and re-run `scripts\install.ps1` (elevated) — but
   a moving IP also breaks the tablets, so the reservation is the real fix.
 - **`local` is not 200** → it's not a network/IP issue; Caddy or an upstream is actually down —
   go to §6 and the logs.

@@ -182,7 +182,7 @@ Fill every `CHANGE_ME` / `(required)` value. **Critical:** `DB_PASSWORD` must eq
 ## 6b. Set this box's network identity (`box.env`)
 
 `env\box.env` is the **single source of truth** for the box's LAN IP and subnet. The `Caddyfile`
-uses `{$LAGUNA_LAN_IP}` / `{$LAGUNA_LAN_CIDR}` placeholders, the firewall rule derives from the
+uses `{$EDGE_LAN_IP}` / `{$EDGE_LAN_CIDR}` placeholders, the firewall rule derives from the
 same CIDR, and Caddy's cert SAN comes from the IP — so they can't drift apart. **Never hardcode
 an IP in the Caddyfile.**
 
@@ -194,13 +194,13 @@ notepad env\box.env
 
 Set both values for THIS box:
 
-- `LAGUNA_LAN_IP` — the box's static / DHCP-reserved IPv4 address (e.g. `192.168.0.123`). Pin it
+- `EDGE_LAN_IP` — the box's static / DHCP-reserved IPv4 address (e.g. `192.168.0.123`). Pin it
   with a router DHCP reservation (step 9) so it never changes.
-- `LAGUNA_LAN_CIDR` — the POS subnet in CIDR form (e.g. `192.168.0.0/24`). `LAGUNA_LAN_IP` must
+- `EDGE_LAN_CIDR` — the POS subnet in CIDR form (e.g. `192.168.0.0/24`). `EDGE_LAN_IP` must
   fall inside it.
 
 `install.ps1` **preflights** these against reality — if the box doesn't actually hold
-`LAGUNA_LAN_IP`, or the IP isn't inside `LAGUNA_LAN_CIDR`, it aborts with a clear message instead
+`EDGE_LAN_IP`, or the IP isn't inside `EDGE_LAN_CIDR`, it aborts with a clear message instead
 of leaving you with "services Running but nothing reachable."
 
 ---
@@ -214,7 +214,7 @@ verifies Caddy came up, and adds the firewall rule.
 ```powershell
 cd C:\laguna-edge
 .\scripts\install.ps1
-# The firewall defaults to LAGUNA_LAN_CIDR from box.env. Pass -AllowedTabletIPs ONLY to
+# The firewall defaults to EDGE_LAN_CIDR from box.env. Pass -AllowedTabletIPs ONLY to
 # tighten to specific DHCP-reserved tablet IPs, e.g.:
 # .\scripts\install.ps1 -AllowedTabletIPs '192.168.0.21','192.168.0.22'
 ```
@@ -231,23 +231,23 @@ Run the smoke check (full version in [`VALIDATION.md`](VALIDATION.md)):
 Get-Service laguna-* | Format-Table Name, Status, StartType
 # All four should be Running.
 
-# Use the LAGUNA_LAN_IP you set in box.env (this box: 192.168.0.123).
+# Use the EDGE_LAN_IP you set in box.env (this box: 192.168.0.123).
 curl.exe -k -i https://192.168.0.123/        # expect: 307, Location: /signin  (RELATIVE)
 curl.exe -k -i https://192.168.0.123/signin  # expect: 200, HTML
 ```
 
-> **`curl: (28) ... Couldn't connect`** = the IP isn't reachable: `LAGUNA_LAN_IP` in `box.env`
+> **`curl: (28) ... Couldn't connect`** = the IP isn't reachable: `EDGE_LAN_IP` in `box.env`
 > doesn't match the address this box actually holds (run `Get-NetIPAddress -AddressFamily IPv4`).
 > Fix `box.env` and re-run `install.ps1` — its preflight now catches this before it bites.
 
-If `https://<LAGUNA_LAN_IP>/` redirects to `localhost:3000`, the Caddyfile `header_down Location`
+If `https://<EDGE_LAN_IP>/` redirects to `localhost:3000`, the Caddyfile `header_down Location`
 fix is missing — see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 
 ---
 
 ## 9. Network + tablets
 
-1. **Router:** add a DHCP reservation binding the box's MAC → its `LAGUNA_LAN_IP` (this box:
+1. **Router:** add a DHCP reservation binding the box's MAC → its `EDGE_LAN_IP` (this box:
    `192.168.0.123`) so the IP never changes. (The Caddy cert SAN and the firewall rule are tied
    to this IP.)
 2. **Why HTTPS shows "not private" (`ERR_CERT_AUTHORITY_INVALID`):** the Caddyfile uses

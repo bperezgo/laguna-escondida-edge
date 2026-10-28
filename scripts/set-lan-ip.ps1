@@ -13,7 +13,7 @@
   because Caddy binds the OLD address. Three things have to move together:
 
     1. env\box.env            — the repo's source of truth (install.ps1 preflights against it)
-    2. machine env vars       — what the Caddy service ACTUALLY resolves {$LAGUNA_LAN_IP} from
+    2. machine env vars       — what the Caddy service ACTUALLY resolves {$EDGE_LAN_IP} from
     3. the laguna-caddy service — only re-reads the env vars on process start, not on reload
 
   Editing box.env alone does nothing. `caddy reload` alone does nothing (it re-reads the
@@ -88,9 +88,9 @@ foreach ($line in (Get-Content $BoxEnv -Encoding UTF8)) {
   $kv = $t -split '=', 2
   if ($kv.Count -eq 2) { $box[$kv[0].Trim()] = $kv[1].Trim() }
 }
-$oldIp   = $box['LAGUNA_LAN_IP']
-$oldCidr = $box['LAGUNA_LAN_CIDR']
-if (-not $oldCidr) { throw "env\box.env has no LAGUNA_LAN_CIDR. Set it (see env\box.env.example)." }
+$oldIp   = $box['EDGE_LAN_IP']
+$oldCidr = $box['EDGE_LAN_CIDR']
+if (-not $oldCidr) { throw "env\box.env has no EDGE_LAN_CIDR. Set it (see env\box.env.example)." }
 
 # --- 2. Work out the new identity ----------------------------------------------------
 # Auto-detect = the adapter that holds the IPv4 default gateway. That is the one actually on
@@ -136,7 +136,7 @@ if (-not $Cidr) {
       $detectedPrefix = (Get-NetIPAddress -IPAddress $IP -AddressFamily IPv4).PrefixLength
     }
     $Cidr = Get-NetworkCidr $IP $detectedPrefix
-    Write-Warning "$IP is outside the old subnet $oldCidr. Deriving new LAGUNA_LAN_CIDR=$Cidr."
+    Write-Warning "$IP is outside the old subnet $oldCidr. Deriving new EDGE_LAN_CIDR=$Cidr."
   }
 }
 
@@ -147,14 +147,14 @@ Write-Host "  CIDR : $oldCidr  ->  $Cidr"
 Write-Host ""
 
 # --- 3. Apply: box.env, then the machine env vars Caddy actually reads ----------------
-Set-EnvFileValue $BoxEnv 'LAGUNA_LAN_IP'   $IP
-Set-EnvFileValue $BoxEnv 'LAGUNA_LAN_CIDR' $Cidr
+Set-EnvFileValue $BoxEnv 'EDGE_LAN_IP'   $IP
+Set-EnvFileValue $BoxEnv 'EDGE_LAN_CIDR' $Cidr
 Write-Host "Updated $BoxEnv"
 
-[Environment]::SetEnvironmentVariable('LAGUNA_LAN_IP',   $IP,   'Machine')
-[Environment]::SetEnvironmentVariable('LAGUNA_LAN_CIDR', $Cidr, 'Machine')
-$env:LAGUNA_LAN_IP   = $IP
-$env:LAGUNA_LAN_CIDR = $Cidr
+[Environment]::SetEnvironmentVariable('EDGE_LAN_IP',   $IP,   'Machine')
+[Environment]::SetEnvironmentVariable('EDGE_LAN_CIDR', $Cidr, 'Machine')
+$env:EDGE_LAN_IP   = $IP
+$env:EDGE_LAN_CIDR = $Cidr
 Write-Host "Updated machine env vars"
 
 # --- 4. Firewall — only when the SUBNET moved ----------------------------------------

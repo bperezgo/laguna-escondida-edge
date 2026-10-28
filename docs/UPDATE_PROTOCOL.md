@@ -31,7 +31,7 @@ If either check fails (no internet), the previous offer is left as it is.
 The offered version is `<edge-node tag>+<next tag>`, e.g. `v1.1.21+v1.0.4`. Both apps are always
 installed as that pair.
 
-## State files (`LAGUNA_STATE_DIR`, `C:\laguna-edge\state`)
+## State files (`EDGE_STATE_DIR`, `C:\laguna-edge\state`)
 
 Only SYSTEM and Administrators can write here (`install.ps1` sets the ACL). JSON, no BOM, written
 to `<name>.tmp` and renamed.

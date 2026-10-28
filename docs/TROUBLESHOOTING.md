@@ -4,7 +4,7 @@ The "other document you might need." This is the one to open at the restaurant w
 misbehaves and there's no Claude to ask. Each entry: **symptom → why → fix**. Work top-down;
 the layers map to [`VALIDATION.md`](VALIDATION.md) (Postgres → edge-node → Next → Caddy → edge).
 
-> Install root `C:\laguna-edge`, LAN IP `192.168.0.123` (this box's `LAGUNA_LAN_IP` from
+> Install root `C:\laguna-edge`, LAN IP `192.168.0.123` (this box's `EDGE_LAN_IP` from
 > `env\box.env`). Elevated PowerShell unless noted.
 
 ---
@@ -172,7 +172,7 @@ netstat -ano | Select-String ':443\s' | Select-String LISTENING
 
   It updates `env\box.env` **and** the machine env vars **and** restarts `laguna-caddy`, then
   proves it worked by reading the cert Caddy actually serves. All three must move together:
-  the `Caddyfile` resolves `{$LAGUNA_LAN_IP}` from the *machine env var* at process start, so
+  the `Caddyfile` resolves `{$EDGE_LAN_IP}` from the *machine env var* at process start, so
   editing `box.env` alone does nothing, and `caddy reload` alone does nothing (it re-reads the
   file, not the environment). Tablets then browse to the new `https://<ip>` — the internal CA
   root is unchanged, so no tablet needs re-trusting.

@@ -5,7 +5,7 @@
 schedule so the box tells you when something breaks — important because there's no one watching
 it at the restaurant.
 
-> Install root `C:\laguna-edge`, LAN IP `192.168.0.123` (this box's `LAGUNA_LAN_IP` from
+> Install root `C:\laguna-edge`, LAN IP `192.168.0.123` (this box's `EDGE_LAN_IP` from
 > `env\box.env`). All commands are PowerShell on the box.
 
 ---
@@ -111,7 +111,7 @@ Get-PSDrive C | Select-Object Used, Free
 ```
 
 - `logs\` is self-capping (see §2) — fine.
-- `alloy-data\` is capped by `LAGUNA_TELEMETRY_BUFFER_BYTES`, but **the cap is per signal
+- `alloy-data\` is capped by `EDGE_TELEMETRY_BUFFER_BYTES`, but **the cap is per signal
   and the buffer file allocates in doublings**, so budget ~6× the configured number
   (32 MiB default ≈ 192 MiB worst case). If it is bigger than that, something is
   misconfigured — see the runbook.

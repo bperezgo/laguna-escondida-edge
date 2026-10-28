@@ -12,7 +12,7 @@
 #>
 [CmdletBinding()]
 param(
-  # IPs / CIDRs allowed on :443 and :80. Defaults to LAGUNA_LAN_CIDR from env\box.env.
+  # IPs / CIDRs allowed on :443 and :80. Defaults to EDGE_LAN_CIDR from env\box.env.
   [string[]] $AllowedTabletIPs
 )
 
@@ -26,7 +26,7 @@ New-Item -ItemType Directory -Force -Path $Logs | Out-Null
 # --- 0. Network identity from env\box.env (feeds the Caddyfile, cert SAN and firewall) ----
 $BoxEnv = Join-Path $Root 'env\box.env'
 if (-not (Test-Path $BoxEnv)) {
-  throw "Missing $BoxEnv. Copy env\box.env.example to env\box.env and set LAGUNA_LAN_IP / LAGUNA_LAN_CIDR for this box."
+  throw "Missing $BoxEnv. Copy env\box.env.example to env\box.env and set EDGE_LAN_IP / EDGE_LAN_CIDR for this box."
 }
 $box = @{}
 foreach ($line in Get-Content $BoxEnv) {
@@ -35,24 +35,32 @@ foreach ($line in Get-Content $BoxEnv) {
   $kv = $t -split '=', 2
   if ($kv.Count -eq 2) { $box[$kv[0].Trim()] = $kv[1].Trim() }
 }
-$LanIp   = $box['LAGUNA_LAN_IP']
-$LanCidr = $box['LAGUNA_LAN_CIDR']
+function Assert-NoLegacyKeys([hashtable]$cfg, [string]$file) {
+  $legacy = @($cfg.Keys | Where-Object { $_ -like 'LAGUNA_*' })
+  if ($legacy) {
+    throw ("$file uses the old LAGUNA_ prefix ($($legacy -join ', ')). " +
+           "Rename each to EDGE_ (e.g. LAGUNA_LAN_IP -> EDGE_LAN_IP); see $file.example.")
+  }
+}
+Assert-NoLegacyKeys $box 'env\box.env'
+$LanIp   = $box['EDGE_LAN_IP']
+$LanCidr = $box['EDGE_LAN_CIDR']
 if (-not $LanIp -or -not $LanCidr) {
-  throw "env\box.env must define both LAGUNA_LAN_IP and LAGUNA_LAN_CIDR."
+  throw "env\box.env must define both EDGE_LAN_IP and EDGE_LAN_CIDR."
 }
 # Optional, comma-separated. Blank keeps the box IP-only.
-$LanHost = $box['LAGUNA_LAN_HOST']
+$LanHost = $box['EDGE_LAN_HOST']
 
 # A wrong IP leaves every service Running but unreachable, so fail loudly here.
 $boxIps = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue).IPAddress
 if ($boxIps -notcontains $LanIp) {
-  throw ("box.env says LAGUNA_LAN_IP=$LanIp but this box does NOT hold that address. " +
+  throw ("box.env says EDGE_LAN_IP=$LanIp but this box does NOT hold that address. " +
          "This box has: $($boxIps -join ', '). Fix env\box.env (or set a DHCP reservation / static IP).")
 }
 $cidrParts = $LanCidr -split '/'
-if ($cidrParts.Count -ne 2) { throw "LAGUNA_LAN_CIDR ('$LanCidr') is not valid CIDR (expected e.g. 192.168.0.0/24)." }
+if ($cidrParts.Count -ne 2) { throw "EDGE_LAN_CIDR ('$LanCidr') is not valid CIDR (expected e.g. 192.168.0.0/24)." }
 $prefix = [int]$cidrParts[1]
-if ($prefix -lt 0 -or $prefix -gt 32) { throw "LAGUNA_LAN_CIDR prefix '/$prefix' is out of range (0-32)." }
+if ($prefix -lt 0 -or $prefix -gt 32) { throw "EDGE_LAN_CIDR prefix '/$prefix' is out of range (0-32)." }
 function Convert-IpToUInt32([string]$ip) {
   $bytes = [System.Net.IPAddress]::Parse($ip).GetAddressBytes()
   [Array]::Reverse($bytes)
@@ -63,20 +71,26 @@ $mask  = [uint32]((0xFFFFFFFFL -shl (32 - $prefix)) -band 0xFFFFFFFFL)
 $ipU   = Convert-IpToUInt32 $LanIp
 $netU  = Convert-IpToUInt32 $cidrParts[0]
 if (($ipU -band $mask) -ne ($netU -band $mask)) {
-  throw "LAGUNA_LAN_IP=$LanIp is not inside LAGUNA_LAN_CIDR=$LanCidr. Fix env\box.env."
+  throw "EDGE_LAN_IP=$LanIp is not inside EDGE_LAN_CIDR=$LanCidr. Fix env\box.env."
 }
 
 # Composed here, not in the Caddyfile, so a blank host doesn't leave an empty ", <ip>" label.
 if ($LanHost) { $SiteAddr = "$LanHost, $LanIp" } else { $SiteAddr = $LanIp }
 
 # Machine scope so the Caddy service resolves the {$...} placeholders.
-[Environment]::SetEnvironmentVariable('LAGUNA_LAN_IP',    $LanIp,    'Machine')
-[Environment]::SetEnvironmentVariable('LAGUNA_LAN_CIDR',  $LanCidr,  'Machine')
-[Environment]::SetEnvironmentVariable('LAGUNA_SITE_ADDR', $SiteAddr, 'Machine')
-$env:LAGUNA_LAN_IP    = $LanIp
-$env:LAGUNA_LAN_CIDR  = $LanCidr
-$env:LAGUNA_SITE_ADDR = $SiteAddr
-Write-Host "Network identity OK: LAGUNA_SITE_ADDR='$SiteAddr'  LAGUNA_LAN_CIDR=$LanCidr (from env\box.env)"
+[Environment]::SetEnvironmentVariable('EDGE_LAN_IP',    $LanIp,    'Machine')
+[Environment]::SetEnvironmentVariable('EDGE_LAN_CIDR',  $LanCidr,  'Machine')
+[Environment]::SetEnvironmentVariable('EDGE_SITE_ADDR', $SiteAddr, 'Machine')
+$env:EDGE_LAN_IP    = $LanIp
+$env:EDGE_LAN_CIDR  = $LanCidr
+$env:EDGE_SITE_ADDR = $SiteAddr
+Write-Host "Network identity OK: EDGE_SITE_ADDR='$SiteAddr'  EDGE_LAN_CIDR=$LanCidr (from env\box.env)"
+
+# Every var this repo sets is EDGE_* now; drop the pre-rename copies so nothing reads stale values.
+$machineEnv = [Environment]::GetEnvironmentVariables('Machine')
+foreach ($name in @($machineEnv.Keys | Where-Object { $_ -like 'LAGUNA_*' })) {
+  [Environment]::SetEnvironmentVariable($name, $null, 'Machine')
+}
 
 if (-not $PSBoundParameters.ContainsKey('AllowedTabletIPs')) { $AllowedTabletIPs = @($LanCidr) }
 
@@ -123,12 +137,14 @@ if (-not $InstallAlloy) {
     if ($kv.Count -eq 2) { $alloyCfg[$kv[0].Trim()] = $kv[1].Trim() }
   }
 
-  $NodeKey = $alloyCfg['LAGUNA_NODE_KEY']
+  Assert-NoLegacyKeys $alloyCfg 'env\alloy.env'
+
+  $NodeKey = $alloyCfg['EDGE_NODE_KEY']
   if (-not $NodeKey -or $NodeKey -eq 'CHANGE_ME') {
-    throw "env\alloy.env must set LAGUNA_NODE_KEY (same value as NODE_SYNC_KEY in env\edge-node.env)."
+    throw "env\alloy.env must set EDGE_NODE_KEY (same value as NODE_SYNC_KEY in env\edge-node.env)."
   }
-  if (-not $alloyCfg['LAGUNA_TELEMETRY_INGEST_URL']) {
-    throw "env\alloy.env must set LAGUNA_TELEMETRY_INGEST_URL (the cloud backend's /api/telemetry base URL)."
+  if (-not $alloyCfg['EDGE_TELEMETRY_INGEST_URL']) {
+    throw "env\alloy.env must set EDGE_TELEMETRY_INGEST_URL (the cloud backend's /api/telemetry base URL)."
   }
 
   # Alloy stamps metrics and the app stamps logs/traces; a mismatch shows one box as two.
@@ -143,16 +159,16 @@ if (-not $InstallAlloy) {
   if (-not $nodeCfg['NODE_ID']) {
     throw ("env\edge-node.env must set NODE_ID explicitly when the telemetry sidecar is enabled " +
            "(it is otherwise derived inside the app and Alloy cannot know the value). " +
-           "Pick a stable id for this box and set the SAME value as LAGUNA_NODE_ID in env\alloy.env.")
+           "Pick a stable id for this box and set the SAME value as EDGE_NODE_ID in env\alloy.env.")
   }
-  if ($alloyCfg['LAGUNA_NODE_ID'] -ne $nodeCfg['NODE_ID']) {
-    throw "LAGUNA_NODE_ID ('$($alloyCfg['LAGUNA_NODE_ID'])') must equal NODE_ID ('$($nodeCfg['NODE_ID'])') in env\edge-node.env."
+  if ($alloyCfg['EDGE_NODE_ID'] -ne $nodeCfg['NODE_ID']) {
+    throw "EDGE_NODE_ID ('$($alloyCfg['EDGE_NODE_ID'])') must equal NODE_ID ('$($nodeCfg['NODE_ID'])') in env\edge-node.env."
   }
-  if ($alloyCfg['LAGUNA_ORGANIZATION_ID'] -ne $nodeCfg['ORGANIZATION_ID']) {
-    throw "LAGUNA_ORGANIZATION_ID ('$($alloyCfg['LAGUNA_ORGANIZATION_ID'])') must equal ORGANIZATION_ID ('$($nodeCfg['ORGANIZATION_ID'])') in env\edge-node.env."
+  if ($alloyCfg['EDGE_ORGANIZATION_ID'] -ne $nodeCfg['ORGANIZATION_ID']) {
+    throw "EDGE_ORGANIZATION_ID ('$($alloyCfg['EDGE_ORGANIZATION_ID'])') must equal ORGANIZATION_ID ('$($nodeCfg['ORGANIZATION_ID'])') in env\edge-node.env."
   }
   if ($nodeCfg['NODE_SYNC_KEY'] -and $NodeKey -ne $nodeCfg['NODE_SYNC_KEY']) {
-    throw "LAGUNA_NODE_KEY must equal NODE_SYNC_KEY in env\edge-node.env -- the cloud matches both against one key."
+    throw "EDGE_NODE_KEY must equal NODE_SYNC_KEY in env\edge-node.env -- the cloud matches both against one key."
   }
 
   # WriteAllText: a BOM or trailing newline would end up in X-Node-Key and cause 401s.
@@ -161,20 +177,21 @@ if (-not $InstallAlloy) {
   # LocalSystem (S-1-5-18) and Administrators (S-1-5-32-544) only.
   & icacls $KeyFile /inheritance:r /grant '*S-1-5-18:(R)' '*S-1-5-32-544:(F)' /C /Q | Out-Null
 
-  $BufferDir = $alloyCfg['LAGUNA_TELEMETRY_BUFFER_DIR']
+  $BufferDir = $alloyCfg['EDGE_TELEMETRY_BUFFER_DIR']
   if (-not $BufferDir) { $BufferDir = Join-Path $Root 'alloy-data\buffer' }
   New-Item -ItemType Directory -Force -Path $BufferDir, (Join-Path $Root 'alloy-data\wal') | Out-Null
 
-  # LAGUNA_* only, so a typo can't set PATH machine-wide. The key stays out of the environment.
+  # EDGE_* only, so a typo can't set PATH machine-wide. The key stays out of the environment.
   foreach ($k in $alloyCfg.Keys) {
-    if ($k -eq 'LAGUNA_NODE_KEY' -or $k -notlike 'LAGUNA_*') { continue }
+    if ($k -eq 'EDGE_NODE_KEY' -or $k -notlike 'EDGE_*') { continue }
     [Environment]::SetEnvironmentVariable($k, $alloyCfg[$k], 'Machine')
     Set-Item -Path "env:$k" -Value $alloyCfg[$k]
   }
-  [Environment]::SetEnvironmentVariable('LAGUNA_NODE_KEY_FILE',        $KeyFile,   'Machine')
-  [Environment]::SetEnvironmentVariable('LAGUNA_TELEMETRY_BUFFER_DIR', $BufferDir, 'Machine')
-  $env:LAGUNA_NODE_KEY_FILE        = $KeyFile
-  $env:LAGUNA_TELEMETRY_BUFFER_DIR = $BufferDir
+  [Environment]::SetEnvironmentVariable('EDGE_NODE_KEY_FILE',        $KeyFile,   'Machine')
+  [Environment]::SetEnvironmentVariable('EDGE_TELEMETRY_BUFFER_DIR', $BufferDir, 'Machine')
+  $env:EDGE_NODE_KEY_FILE        = $KeyFile
+  $env:EDGE_TELEMETRY_BUFFER_DIR = $BufferDir
+
 
   # Fail here rather than as a crash-looping service.
   $AlloyExe = Join-Path $Root 'artifacts\alloy\alloy.exe'
@@ -183,7 +200,7 @@ if (-not $InstallAlloy) {
   }
   & $AlloyExe validate --stability.level=public-preview (Join-Path $Root 'alloy\config.alloy') | Out-Host
   if ($LASTEXITCODE -ne 0) { throw "alloy\config.alloy failed validation; fix it before installing." }
-  Write-Host "Telemetry sidecar config OK -> $($alloyCfg['LAGUNA_TELEMETRY_INGEST_URL']) (node $($alloyCfg['LAGUNA_NODE_ID']))"
+  Write-Host "Telemetry sidecar config OK -> $($alloyCfg['EDGE_TELEMETRY_INGEST_URL']) (node $($alloyCfg['EDGE_NODE_ID']))"
 }
 
 # --- 1e. Owner-triggered updates: the updater's state and DB backup dirs -------------
@@ -193,8 +210,8 @@ foreach ($d in $StateDir, (Join-Path $Root 'backups')) {
   New-Item -ItemType Directory -Force -Path $d | Out-Null
   & icacls $d /inheritance:r /grant '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /C /Q | Out-Null
 }
-if (-not (Select-String -Path $EnvSrc -Pattern '^\s*LAGUNA_STATE_DIR\s*=\s*[^\s#]' -Quiet)) {
-  Write-Warning "env\edge-node.env has no LAGUNA_STATE_DIR, so the POS will not offer updates. Add: LAGUNA_STATE_DIR=$StateDir"
+if (-not (Select-String -Path $EnvSrc -Pattern '^\s*EDGE_STATE_DIR\s*=\s*[^\s#]' -Quiet)) {
+  Write-Warning "env\edge-node.env has no EDGE_STATE_DIR, so the POS will not offer updates. Add: EDGE_STATE_DIR=$StateDir"
 }
 
 # --- 2. Install services in dependency order --------------------------------------
@@ -267,7 +284,7 @@ if ($caddyState -ne 'Running') {
   $logTail = ''
   $errLog = Join-Path $Logs 'caddy.err.log'
   if (Test-Path $errLog) { $logTail = (Get-Content $errLog -Tail 15) -join "`n" }
-  throw ("laguna-caddy is '$caddyState', not Running. The Caddyfile {`$LAGUNA_SITE_ADDR}/{`$LAGUNA_LAN_CIDR} " +
+  throw ("laguna-caddy is '$caddyState', not Running. The Caddyfile {`$EDGE_SITE_ADDR}/{`$EDGE_LAN_CIDR} " +
          "placeholders likely didn't resolve. Confirm the machine env vars, then re-run.`n--- caddy.err.log ---`n$logTail")
 }
 Write-Host "laguna-caddy is Running."
