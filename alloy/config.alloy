@@ -7,7 +7,7 @@
 //                                                                          |
 //                              disk buffer (capped) <--> [otlphttp] <------/
 //                                                            |
-//                                      https://<cloud>/api/telemetry  (X-Node-Key)
+//                                      https://<cloud>/api/telemetry  (X-Node-Key, X-Node-ID)
 //
 // Configured by env vars from env\alloy.env (see env\alloy.env.example).
 // The disk buffer is public-preview, so --stability.level=public-preview is required.
@@ -33,6 +33,12 @@ otelcol.auth.headers "cloud" {
 	header {
 		key   = "X-Node-Key"
 		value = local.file.node_key.content
+	}
+
+	// The cloud resolves the organization from this id; without it the ingest answers 401.
+	header {
+		key   = "X-Node-ID"
+		value = sys.env("EDGE_NODE_ID")
 	}
 }
 
